@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="AGENT.md" />
+    <File Path="LICENSE.md" />
+    <File Path="README.md" />
+  </Folder>
+  <Project Path="Asiri.Abstractions/Asiri.Abstractions.csproj" />
+  <Project Path="Asiri.ContainerBrowser/Asiri.ContainerBrowser.csproj" Id="d21c09f6-b515-45db-8640-0eff9b46c70e" />
+  <Project Path="Asiri.Core.Tests/Asiri.Core.Tests.csproj" />
+  <Project Path="Asiri.Core/Asiri.Core.csproj" />
+</Solution>

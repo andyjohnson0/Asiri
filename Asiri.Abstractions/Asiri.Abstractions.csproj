@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>uk.andyjohnson.Asiri.Abstractions</RootNamespace>
+    <Version>0.1.0</Version>
+    <Authors>Andrew Johnson</Authors>
+    <Description>Dependency-free filesystem contracts (IDirectory, IFile, IFileSystemEntry) for read-only VeraCrypt container access.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/andyjohnson0/Asiri</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/andyjohnson0/Asiri</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+</Project>

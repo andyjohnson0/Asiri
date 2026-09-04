@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>uk.andyjohnson.Asiri.Core</RootNamespace>
+    <Version>0.1.0</Version>
+    <Authors>Andrew Johnson</Authors>
+    <Description>Standalone, read-only access to VeraCrypt encrypted file containers.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/andyjohnson0/Asiri</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/andyjohnson0/Asiri</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
+    <PackageReference Include="LTRData.DiscUtils.Core" Version="1.0.88" />
+    <PackageReference Include="LTRData.DiscUtils.Fat" Version="1.0.88" />
+    <PackageReference Include="LTRData.DiscUtils.Ntfs" Version="1.0.88" />
+    <PackageReference Include="LTRData.DiscUtils.ExFat" Version="1.0.88" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Asiri.Abstractions\Asiri.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

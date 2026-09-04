@@ -1,0 +1,30 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>uk.andyjohnson.Asiri.ContainerBrowser</RootNamespace>
+    <Version>0.1.0</Version>
+    <Authors>Andrew Johnson</Authors>
+    <Description>WPF reference application for browsing VeraCrypt encrypted file containers using Asiri.Core.</Description>
+    <RepositoryUrl>https://github.com/andyjohnson0/Asiri</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SharpVectors.Wpf" Version="1.8.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Asiri.Abstractions\Asiri.Abstractions.csproj" />
+    <ProjectReference Include="..\Asiri.Core\Asiri.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Icons\*.svg" />
+  </ItemGroup>
+
+</Project>

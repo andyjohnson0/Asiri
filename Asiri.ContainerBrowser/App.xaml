@@ -1,0 +1,9 @@
+﻿<Application x:Class="uk.andyjohnson.Asiri.ContainerBrowser.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:uk.andyjohnson.Asiri.ContainerBrowser"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+         
+    </Application.Resources>
+</Application>
