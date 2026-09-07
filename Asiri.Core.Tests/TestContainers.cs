@@ -96,6 +96,54 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             HashAlgorithm.Blake2s256,
             FileSystemType.ExFat);
 
+        /// <summary>AES-Twofish / SHA-512 / exFAT.</summary>
+        public static readonly ContainerFixture AesTwofishExFat = new ContainerFixture(
+            "AES-TWOFISH_SHA-512_EXFAT.hc",
+            "ExcLtHMJlW)8fb?VD?$L",
+            CryptoAlgorithm.AesTwofish,
+            HashAlgorithm.Sha512,
+            FileSystemType.ExFat);
+
+        /// <summary>AES-Twofish-Serpent / SHA-512 / exFAT.</summary>
+        public static readonly ContainerFixture AesTwofishSerpentExFat = new ContainerFixture(
+            "AES-TWOFISH-SERPENT_SHA-512_EXFAT.hc",
+            "EWLe<8ZKGbpiV%Y56C6Z",
+            CryptoAlgorithm.AesTwofishSerpent,
+            HashAlgorithm.Sha512,
+            FileSystemType.ExFat);
+
+        /// <summary>Serpent-AES / SHA-512 / exFAT.</summary>
+        public static readonly ContainerFixture SerpentAesExFat = new ContainerFixture(
+            "SERPENT-AES_SHA-512_EXFAT.hc",
+            "H(g0d9$mM4V=al9N1QSM",
+            CryptoAlgorithm.SerpentAes,
+            HashAlgorithm.Sha512,
+            FileSystemType.ExFat);
+
+        /// <summary>Serpent-Twofish-AES / SHA-512 / exFAT.</summary>
+        public static readonly ContainerFixture SerpentTwofishAesExFat = new ContainerFixture(
+            "SERPENT-TWOFISH-AES_SHA-512_EXFAT.hc",
+            "PT~gXCJW9jRZraD#Ja5e",
+            CryptoAlgorithm.SerpentTwofishAes,
+            HashAlgorithm.Sha512,
+            FileSystemType.ExFat);
+
+        /// <summary>Twofish-Serpent / SHA-512 / exFAT.</summary>
+        public static readonly ContainerFixture TwofishSerpentExFat = new ContainerFixture(
+            "TWOFISH-SERPENT_SHA-512_EXFAT.hc",
+            "BacR-?#R7^2QlAYCOV6y",
+            CryptoAlgorithm.TwofishSerpent,
+            HashAlgorithm.Sha512,
+            FileSystemType.ExFat);
+
+        /// <summary>Camellia-Serpent / SHA-512 / exFAT.</summary>
+        public static readonly ContainerFixture CamelliaSerpentExFat = new ContainerFixture(
+            "CAMELLIA-SERPENT_SHA-512_EXFAT.hc",
+            "AP9AF%XT~LRIKLPC$m=(",
+            CryptoAlgorithm.CamelliaSerpent,
+            HashAlgorithm.Sha512,
+            FileSystemType.ExFat);
+
         // Add further fixtures here as new (algorithm, filesystem) permutations are supplied, and
         // include them in All() below so shared, filesystem-agnostic tests pick them up
         // automatically.
@@ -117,6 +165,12 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             yield return new object[] { AesSha256ExFat };
             yield return new object[] { AesWhirlpoolExFat };
             yield return new object[] { AesBlake2s256ExFat };
+            yield return new object[] { AesTwofishExFat };
+            yield return new object[] { AesTwofishSerpentExFat };
+            yield return new object[] { SerpentAesExFat };
+            yield return new object[] { SerpentTwofishAesExFat };
+            yield return new object[] { TwofishSerpentExFat };
+            yield return new object[] { CamelliaSerpentExFat };
         }
 
         /// <summary>

@@ -9,6 +9,7 @@ using DiscUtils.ExFat;
 using DiscUtils.Fat;
 using DiscUtils.Ntfs;
 using uk.andyjohnson.Asiri.Abstractions;
+using uk.andyjohnson.Asiri.Core.Crypto;
 using uk.andyjohnson.Asiri.Core.Filesystem.ExFat;
 using uk.andyjohnson.Asiri.Core.Filesystem.Fat;
 using uk.andyjohnson.Asiri.Core.Filesystem.Ntfs;
@@ -16,8 +17,9 @@ using uk.andyjohnson.Asiri.Core.Filesystem.Ntfs;
 namespace uk.andyjohnson.Asiri.Core
 {
     /// <summary>
-    /// The single-cipher algorithm used to encrypt a VeraCrypt container. The architecture allows
-    /// for cascaded ciphers, but only single ciphers are currently implemented.
+    /// The encryption algorithm used to encrypt a VeraCrypt container: either a single cipher, or
+    /// one of VeraCrypt's supported cascades of two or three ciphers applied in sequence. Kuznyechik
+    /// and any cascade involving it are out of scope and not represented here.
     /// </summary>
     public enum CryptoAlgorithm
     {
@@ -31,7 +33,25 @@ namespace uk.andyjohnson.Asiri.Core
         Twofish,
 
         /// <summary>Camellia.</summary>
-        Camellia
+        Camellia,
+
+        /// <summary>AES-Twofish cascade.</summary>
+        AesTwofish,
+
+        /// <summary>AES-Twofish-Serpent cascade.</summary>
+        AesTwofishSerpent,
+
+        /// <summary>Serpent-AES cascade.</summary>
+        SerpentAes,
+
+        /// <summary>Serpent-Twofish-AES cascade.</summary>
+        SerpentTwofishAes,
+
+        /// <summary>Twofish-Serpent cascade.</summary>
+        TwofishSerpent,
+
+        /// <summary>Camellia-Serpent cascade.</summary>
+        CamelliaSerpent
     }
 
     /// <summary>
@@ -121,15 +141,9 @@ namespace uk.andyjohnson.Asiri.Core
             {
                 throw new ArgumentNullException(nameof(password));
             }
-            switch (algo)
+            if (!CascadeDefinitions.IsSupported(algo))
             {
-                case CryptoAlgorithm.Aes:
-                case CryptoAlgorithm.Serpent:
-                case CryptoAlgorithm.Twofish:
-                case CryptoAlgorithm.Camellia:
-                    break;
-                default:
-                    throw new ArgumentException($"Unsupported encryption algorithm: {algo}.", nameof(algo));
+                throw new ArgumentException($"Unsupported encryption algorithm: {algo}.", nameof(algo));
             }
 
             switch (hashAlgo)

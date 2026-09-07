@@ -35,8 +35,13 @@ namespace uk.andyjohnson.Asiri.Core
         public const long BackupHeaderOffsetFromEnd = 131072;
 
         private const int Pbkdf2Iterations = 500000;
-        private const int HeaderKeyLengthBits = 512;
-        private const int CipherKeySize = 32;
+
+        /// <summary>
+        /// The number of bits of header key material required per cascade component: a 256-bit
+        /// cipher key plus a 256-bit tweak key. The total derived key length for an algorithm is
+        /// this multiplied by its component count (1 for a single cipher, 2 or 3 for a cascade).
+        /// </summary>
+        private const int ComponentKeyLengthBits = 512;
 
         private const int MinSectorSize = 512;
         private const int MaxSectorSize = 4096;
@@ -207,15 +212,22 @@ namespace uk.andyjohnson.Asiri.Core
                 var salt = new byte[SaltSize];
                 Buffer.BlockCopy(region, 0, salt, 0, SaltSize);
 
+                var componentCount = CascadeDefinitions.GetComponentCount(algorithm);
+                var keyMaterialSize = CascadeDefinitions.ComponentKeySize * componentCount;
+
                 // PBKDF2 (500,000 iterations) is the most expensive step in this whole pipeline, so
                 // cancellation is checked immediately before it, not just once at the top of the task.
                 cancellationToken.ThrowIfCancellationRequested();
-                var headerKey = DeriveHeaderKey(passwordBytes, salt, hashAlgorithm);
+                var headerKey = DeriveHeaderKey(passwordBytes, salt, hashAlgorithm, componentCount);
 
-                var headerCipherKey = new byte[CipherKeySize];
-                var headerTweakKey = new byte[CipherKeySize];
-                Buffer.BlockCopy(headerKey, 0, headerCipherKey, 0, CipherKeySize);
-                Buffer.BlockCopy(headerKey, CipherKeySize, headerTweakKey, 0, CipherKeySize);
+                // The derived key is laid out as all components' cipher keys concatenated, followed
+                // by all components' tweak keys concatenated - see CascadeDefinitions and
+                // XtsCipherSelector, which slice each component's 32-byte share out of these two
+                // halves in the cascade's key-segment order.
+                var headerCipherKey = new byte[keyMaterialSize];
+                var headerTweakKey = new byte[keyMaterialSize];
+                Buffer.BlockCopy(headerKey, 0, headerCipherKey, 0, keyMaterialSize);
+                Buffer.BlockCopy(headerKey, keyMaterialSize, headerTweakKey, 0, keyMaterialSize);
 
                 var encryptedHeader = new byte[EncryptedHeaderSize];
                 Buffer.BlockCopy(region, SaltSize, encryptedHeader, 0, EncryptedHeaderSize);
@@ -227,9 +239,9 @@ namespace uk.andyjohnson.Asiri.Core
             }, cancellationToken);
         }
 
-        private static byte[] DeriveHeaderKey(byte[] passwordBytes, byte[] salt, HashAlgorithm hashAlgorithm)
+        private static byte[] DeriveHeaderKey(byte[] passwordBytes, byte[] salt, HashAlgorithm hashAlgorithm, int componentCount)
         {
-            return Pbkdf2KeyDerivation.DeriveKey(hashAlgorithm, passwordBytes, salt, Pbkdf2Iterations, HeaderKeyLengthBits);
+            return Pbkdf2KeyDerivation.DeriveKey(hashAlgorithm, passwordBytes, salt, Pbkdf2Iterations, ComponentKeyLengthBits * componentCount);
         }
 
         private static VeraCryptHeader ValidateAndBuildHeader(byte[] d, CryptoAlgorithm algorithm, bool fromBackup)
@@ -262,10 +274,14 @@ namespace uk.andyjohnson.Asiri.Core
                 return null;
             }
 
-            var masterKey = new byte[CipherKeySize];
-            var secondaryKey = new byte[CipherKeySize];
-            Buffer.BlockCopy(d, 192, masterKey, 0, CipherKeySize);
-            Buffer.BlockCopy(d, 224, secondaryKey, 0, CipherKeySize);
+            // As with the header's own encryption key (see TryDecryptAndValidateAsync), the volume's
+            // master/secondary key data is laid out as all components' cipher keys concatenated,
+            // followed by all components' tweak keys concatenated.
+            var keyMaterialSize = CascadeDefinitions.ComponentKeySize * CascadeDefinitions.GetComponentCount(algorithm);
+            var masterKey = new byte[keyMaterialSize];
+            var secondaryKey = new byte[keyMaterialSize];
+            Buffer.BlockCopy(d, 192, masterKey, 0, keyMaterialSize);
+            Buffer.BlockCopy(d, 192 + keyMaterialSize, secondaryKey, 0, keyMaterialSize);
 
             return new VeraCryptHeader
             {

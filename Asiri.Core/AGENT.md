@@ -11,8 +11,11 @@ This document takes precedence over all other instructions for the Asiri.Core pr
 - Do not implement write support.
 - Do not implement support for encrypted partitions or drives.
 - Do not implement hidden volumes.
-- Do not implement cascaded ciphers.
 - Implement AES, Serpent, Twofish, and Camellia.
+- Implement the following cascaded ciphers: AES-Twofish, AES-Twofish-Serpent, Serpent-AES,
+  Serpent-Twofish-AES, Twofish-Serpent, Camellia-Serpent.
+- Do not implement Kuznyechik, or any cascade involving it (Camellia-Kuznyechik,
+  Kuznyechik-AES, Kuznyechik-Serpent-Camellia, Kuznyechik-Twofish).
 - Implement SHA‑512, SHA‑256, Whirlpool, and BLAKE2s‑256.
 - Implement NTFS, FAT (FAT16/FAT32), and exFAT filesystems.
 
@@ -20,7 +23,7 @@ This document takes precedence over all other instructions for the Asiri.Core pr
 - Convert the provided .NET string password to UTF‑8 bytes.
 - Use PBKDF2‑SHA‑512 with VeraCrypt iteration counts.
 - Derive keys exactly as specified in VeraCrypt documentation.
-- Use AES‑XTS via BouncyCastle.
+- Use XTS mode, built on BouncyCastle's block ciphers, for every supported single cipher and cascade.
 - Implement sector‑based decryption.
 - Do not pre‑decrypt the entire container.
 - Decrypt sectors on demand only.
