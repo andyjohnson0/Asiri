@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -16,6 +17,23 @@ namespace uk.andyjohnson.Asiri.Core.Tests
     /// </summary>
     public static class TestContainers
     {
+        // Resolved once, relative to this source file's own location (Asiri.Core.Tests, a sibling
+        // of "Test Data"), so it is correct regardless of how deeply nested the test file that
+        // references a fixture happens to be. Declared first: static field initializers run in
+        // declaration order, and the fixtures below - via KeyFile() - depend on this being ready.
+        private static readonly string TestDataDirectory = GetTestDataDirectory();
+
+        private static string GetTestDataDirectory([CallerFilePath] string sourceFilePath = "")
+        {
+            return Path.Combine(Path.GetDirectoryName(sourceFilePath)!, "Test Data");
+        }
+
+        /// <summary>A keyfile under "Test Data", for use as a ContainerFixture's KeyFiles.</summary>
+        private static FileInfo KeyFile(string fileName)
+        {
+            return new FileInfo(Path.Combine(TestDataDirectory, fileName));
+        }
+
         /// <summary>AES / SHA-512 / NTFS.</summary>
         public static readonly ContainerFixture AesNtfs = new ContainerFixture(
             "AES_SHA-512_NTFS.hc",
@@ -171,6 +189,46 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             FileSystemType.ExFat,
             pim: 20);
 
+        /// <summary>AES / SHA-512 / exFAT, secured by password + one keyfile.</summary>
+        public static readonly ContainerFixture AesKf1ExFat = new ContainerFixture(
+            "AES_SHA-512_EXFAT_KF1.hc",
+            "wVMm#SsQRh5XdxPAr^mC",
+            CryptoAlgorithm.Aes,
+            HashAlgorithm.Sha512,
+            FileSystemType.ExFat,
+            keyFiles: new[] { KeyFile("Keyfile1.bin") });
+
+        /// <summary>AES / SHA-512 / exFAT, secured by one keyfile only - an empty password.</summary>
+        public static readonly ContainerFixture AesKf1EmptyPasswordExFat = new ContainerFixture(
+            "AES_SHA-512_EXFAT_KF1_EMPTYPW.hc",
+            "",
+            CryptoAlgorithm.Aes,
+            HashAlgorithm.Sha512,
+            FileSystemType.ExFat,
+            keyFiles: new[] { KeyFile("Keyfile1.bin") });
+
+        /// <summary>AES / SHA-512 / exFAT, secured by password + two keyfiles together.</summary>
+        public static readonly ContainerFixture AesKf1Kf2ExFat = new ContainerFixture(
+            "AES_SHA-512_EXFAT_KF1_KF2.hc",
+            "eCn8nAr-eK0tLhj)ceFP",
+            CryptoAlgorithm.Aes,
+            HashAlgorithm.Sha512,
+            FileSystemType.ExFat,
+            keyFiles: new[] { KeyFile("Keyfile1.bin"), KeyFile("Keyfile2.bin") });
+
+        /// <summary>
+        /// AES / SHA-512 / exFAT, secured by a keyfile and a password longer than 64 bytes - the
+        /// threshold (see KeyfileMixer) above which VeraCrypt uses a 128-byte mixing pool instead of
+        /// the 64-byte one every other fixture's shorter password selects.
+        /// </summary>
+        public static readonly ContainerFixture AesKf1LongPasswordExFat = new ContainerFixture(
+            "AES_SHA-512_EXFAT_KF1_LONGPW.hc",
+            "~wacqaRl)mfCtNY>IGT%nhL~SLzHWW%9iPnHgPQt6Wj8s1F9(w=Jc<4<1pSaUkd%UTD4)-1h~KJAmhTq",
+            CryptoAlgorithm.Aes,
+            HashAlgorithm.Sha512,
+            FileSystemType.ExFat,
+            keyFiles: new[] { KeyFile("Keyfile1.bin") });
+
         // Add further fixtures here as new (algorithm, filesystem) permutations are supplied, and
         // include them in All() below so shared, filesystem-agnostic tests pick them up
         // automatically.
@@ -200,6 +258,10 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             yield return new object[] { CamelliaSerpentExFat };
             yield return new object[] { AesPim5ExFat };
             yield return new object[] { AesPim20ExFat };
+            yield return new object[] { AesKf1ExFat };
+            yield return new object[] { AesKf1EmptyPasswordExFat };
+            yield return new object[] { AesKf1Kf2ExFat };
+            yield return new object[] { AesKf1LongPasswordExFat };
         }
 
         /// <summary>
@@ -219,7 +281,10 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             /// <summary>The PIM this container was created with, or 0 if it uses the default.</summary>
             public int Pim { get; }
 
-            public ContainerFixture(string fileName, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, FileSystemType filesystemType, int pim = 0)
+            /// <summary>The keyfiles this container was created with, or empty if none.</summary>
+            public IReadOnlyList<FileInfo> KeyFiles { get; }
+
+            public ContainerFixture(string fileName, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, FileSystemType filesystemType, int pim = 0, IReadOnlyList<FileInfo>? keyFiles = null)
             {
                 ContainerFile = new FileInfo(Path.Combine(TestDataDirectory, fileName));
                 Password = password;
@@ -227,12 +292,13 @@ namespace uk.andyjohnson.Asiri.Core.Tests
                 HashAlgorithm = hashAlgorithm;
                 FilesystemType = filesystemType;
                 Pim = pim;
+                KeyFiles = keyFiles ?? Array.Empty<FileInfo>();
             }
 
             /// <summary>Opens this container via the full public VeraCryptContainer.OpenAsync API.</summary>
             public Task<VeraCryptContainer> OpenAsync()
             {
-                return VeraCryptContainer.OpenAsync(ContainerFile, Password, Algorithm, HashAlgorithm, FilesystemType, Pim);
+                return VeraCryptContainer.OpenAsync(ContainerFile, Password, Algorithm, HashAlgorithm, FilesystemType, Pim, KeyFiles);
             }
 
             // Used by the xUnit test runner to label [Theory] cases in output; without this, every

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -75,15 +76,20 @@ namespace uk.andyjohnson.Asiri.Core
         /// set when the container was created. VeraCrypt does not store the PIM in the header, so it
         /// must be supplied by the caller, the same way the password is; it is never searched for.
         /// </param>
+        /// <param name="keyFiles">
+        /// Keyfiles to mix into the password, in order, or null - the default - for none. VeraCrypt
+        /// does not store keyfiles in the header, so, like the password and PIM, they must be
+        /// supplied by the caller and are never searched for.
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>The decrypted and validated volume header.</returns>
-        public static Task<VeraCryptHeader> ParseAsync(string path, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, int pim = 0, CancellationToken cancellationToken = default)
+        public static Task<VeraCryptHeader> ParseAsync(string path, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, int pim = 0, IEnumerable<FileInfo> keyFiles = null, CancellationToken cancellationToken = default)
         {
             if (path == null)
             {
                 throw new ArgumentNullException(nameof(path));
             }
-            return ParseAsync(new FileInfo(path), password, algorithm, hashAlgorithm, pim, cancellationToken);
+            return ParseAsync(new FileInfo(path), password, algorithm, hashAlgorithm, pim, keyFiles, cancellationToken);
         }
 
         /// <summary>
@@ -99,9 +105,14 @@ namespace uk.andyjohnson.Asiri.Core
         /// set when the container was created. VeraCrypt does not store the PIM in the header, so it
         /// must be supplied by the caller, the same way the password is; it is never searched for.
         /// </param>
+        /// <param name="keyFiles">
+        /// Keyfiles to mix into the password, in order, or null - the default - for none. VeraCrypt
+        /// does not store keyfiles in the header, so, like the password and PIM, they must be
+        /// supplied by the caller and are never searched for.
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>The decrypted and validated volume header.</returns>
-        public static Task<VeraCryptHeader> ParseAsync(FileInfo path, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, int pim = 0, CancellationToken cancellationToken = default)
+        public static Task<VeraCryptHeader> ParseAsync(FileInfo path, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, int pim = 0, IEnumerable<FileInfo> keyFiles = null, CancellationToken cancellationToken = default)
         {
             if (path == null)
             {
@@ -120,10 +131,10 @@ namespace uk.andyjohnson.Asiri.Core
                 throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
             }
 
-            return ParseAsyncCore(path, password, algorithm, hashAlgorithm, pim, cancellationToken);
+            return ParseAsyncCore(path, password, algorithm, hashAlgorithm, pim, keyFiles, cancellationToken);
         }
 
-        private static async Task<VeraCryptHeader> ParseAsyncCore(FileInfo path, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, int pim, CancellationToken cancellationToken)
+        private static async Task<VeraCryptHeader> ParseAsyncCore(FileInfo path, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, int pim, IEnumerable<FileInfo> keyFiles, CancellationToken cancellationToken)
         {
             Stream stream;
             try
@@ -138,7 +149,7 @@ namespace uk.andyjohnson.Asiri.Core
             using (stream)
             {
                 var primaryRegion = await ReadRegionAsync(stream, 0, HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                var header = await TryDecryptRegionAsync(primaryRegion, password, algorithm, hashAlgorithm, fromBackup: false, pim, cancellationToken).ConfigureAwait(false);
+                var header = await TryDecryptRegionAsync(primaryRegion, password, algorithm, hashAlgorithm, fromBackup: false, pim, keyFiles, cancellationToken).ConfigureAwait(false);
                 if (header != null)
                 {
                     return header;
@@ -148,7 +159,7 @@ namespace uk.andyjohnson.Asiri.Core
                 {
                     var backupOffset = stream.Length - BackupHeaderOffsetFromEnd;
                     var backupRegion = await ReadRegionAsync(stream, backupOffset, HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                    header = await TryDecryptRegionAsync(backupRegion, password, algorithm, hashAlgorithm, fromBackup: true, pim, cancellationToken).ConfigureAwait(false);
+                    header = await TryDecryptRegionAsync(backupRegion, password, algorithm, hashAlgorithm, fromBackup: true, pim, keyFiles, cancellationToken).ConfigureAwait(false);
                     if (header != null)
                     {
                         return header;
@@ -185,9 +196,12 @@ namespace uk.andyjohnson.Asiri.Core
         /// The container's PIM (Personal Iterations Multiplier), or 0 - the default - if none was
         /// set when the container was created.
         /// </param>
+        /// <param name="keyFiles">
+        /// Keyfiles to mix into the password, in order, or null - the default - for none.
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>The decrypted and validated header, or null if it did not validate.</returns>
-        public static Task<VeraCryptHeader> TryDecryptRegionAsync(byte[] region, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, bool fromBackup, int pim = 0, CancellationToken cancellationToken = default)
+        public static Task<VeraCryptHeader> TryDecryptRegionAsync(byte[] region, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, bool fromBackup, int pim = 0, IEnumerable<FileInfo> keyFiles = null, CancellationToken cancellationToken = default)
         {
             if (region == null)
             {
@@ -206,7 +220,7 @@ namespace uk.andyjohnson.Asiri.Core
                 throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
             }
 
-            var passwordBytes = Encoding.UTF8.GetBytes(password);
+            var passwordBytes = KeyfileMixer.Apply(Encoding.UTF8.GetBytes(password), keyFiles);
             return TryDecryptAndValidateAsync(region, passwordBytes, algorithm, hashAlgorithm, fromBackup, pim, cancellationToken);
         }
 

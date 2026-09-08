@@ -45,6 +45,11 @@ container file and read its contents.
 by supplying it as an optional `pim` parameter to `OpenAsync`; like the password, VeraCrypt does not
 store it in the container and it is never guessed at.
 
+**Keyfiles** — one or more ordinary files can be supplied as an optional `keyFiles` parameter to
+`OpenAsync`, mixed into the password exactly as VeraCrypt itself does, including keyfile-only
+containers (an empty password). Security tokens/smart cards and folder-of-keyfiles are not
+supported — only explicitly-supplied individual files.
+
 **Filesystems** (via [DiscUtils](https://github.com/LTRData/DiscUtils)):
 - NTFS
 - FAT (FAT16 and FAT32)
@@ -56,6 +61,7 @@ store it in the container and it is never guessed at.
 - Encrypted partitions or drives — only container *files*.
 - The Kuznyechik cipher or Streebog hash (GOST algorithms), including every cascade involving
   Kuznyechik (Camellia-Kuznyechik, Kuznyechik-AES, Kuznyechik-Serpent-Camellia, Kuznyechik-Twofish).
+- Security tokens / smart cards (PKCS#11) as a keyfile source.
 
 All cryptographic primitives are provided by [BouncyCastle](https://github.com/bcgit/bc-csharp) —
 Asiri does not implement its own cryptography, only the VeraCrypt-specific header parsing, key

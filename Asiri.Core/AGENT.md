@@ -17,10 +17,16 @@ This document takes precedence over all other instructions for the Asiri.Core pr
 - Do not implement Kuznyechik, or any cascade involving it (Camellia-Kuznyechik,
   Kuznyechik-AES, Kuznyechik-Serpent-Camellia, Kuznyechik-Twofish).
 - Implement SHA‑512, SHA‑256, Whirlpool, and BLAKE2s‑256.
+- Implement opening a container secured by one or more keyfiles, supplied by the caller as ordinary
+  files, mixed into the password per VeraCrypt's own algorithm. Do not implement security
+  tokens/smart cards (PKCS#11) or folder-of-keyfiles as a keyfile source.
 - Implement NTFS, FAT (FAT16/FAT32), and exFAT filesystems.
 
 ## Cryptography Requirements
 - Convert the provided .NET string password to UTF‑8 bytes.
+- Mix any supplied keyfiles into the password bytes, per VeraCrypt's own pool-mixing algorithm,
+  before PBKDF2 - keyfiles are never stored in the header and never searched for; the caller must
+  supply them, like the password.
 - Use PBKDF2 with VeraCrypt's iteration counts, computed from the caller's PIM (Personal Iterations
   Multiplier) per VeraCrypt's own formula - 0 (the default) if none is supplied. PIM is never stored
   in the header and never searched for; the caller must supply it, like the password.
