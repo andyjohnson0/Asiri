@@ -38,8 +38,8 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
                 return;
             }
 
-            var passwordDialog = new PasswordDialog { Owner = this };
-            if (passwordDialog.ShowDialog() != true)
+            var credentialsDialog = new CredentialsDialog { Owner = this };
+            if (credentialsDialog.ShowDialog() != true)
             {
                 return;
             }
@@ -47,13 +47,14 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             OpenMenuItem.IsEnabled = false;
             try
             {
-                _container = await VeraCryptContainer.OpenAsync(new FileInfo(openDialog.FileName), passwordDialog.Password);
+                _container = await VeraCryptContainer.OpenAsync(
+                    new FileInfo(openDialog.FileName), credentialsDialog.Password, credentialsDialog.Pim, credentialsDialog.KeyFiles);
 
                 ClearContentPane();
                 await LoadRootAsync();
 
                 CloseMenuItem.IsEnabled = true;
-                StatusText.Text = $"Opened: {openDialog.FileName} ({_container.Algorithm} / {_container.FileSystemType})";
+                StatusText.Text = $"Opened: {openDialog.FileName} ({_container.Algorithm} / {_container.HashAlgorithm} / {_container.FileSystemType})";
             }
             catch (Exception ex)
             {

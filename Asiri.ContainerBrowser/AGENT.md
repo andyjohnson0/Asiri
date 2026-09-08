@@ -7,7 +7,9 @@ This document takes precedence over all other instructions for the Asiri.Contain
 - Build on the provided `Asiri.ContainerBrowser` project.
 - Use only Asiri.Core (and its Asiri.Abstractions dependency) for VeraCrypt container access.
 - Classic two pane app. Left pane is a tree view of folders and files. Right shows contents of selected file.
-- Provide a way to open a VeraCrypt container using a file open dialog. Then prompt for password. Then display the container's folder hierarchy.
+- Provide a way to open a VeraCrypt container using a file open dialog. Then prompt for the
+  container's credentials - password, optional PIM, optional keyfiles - via `CredentialsDialog`.
+  Then display the container's folder hierarchy.
 - When a file is clicked on:
   - If an image (jpeg or png) then display image in right-hand pane.
   - If a txt file then display text in right-hand pane.
