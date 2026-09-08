@@ -33,7 +33,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
                     TestContainers.AesNtfs.Algorithm,
                     TestContainers.AesNtfs.HashAlgorithm,
                     TestContainers.AesNtfs.FilesystemType,
-                    cts.Token));
+                    cancellationToken: cts.Token));
         }
 
         [Fact]

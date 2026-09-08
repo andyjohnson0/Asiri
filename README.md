@@ -41,6 +41,10 @@ container file and read its contents.
 - Whirlpool
 - BLAKE2s-256
 
+**PIM** (Personal Iterations Multiplier) — a container created with a non-default PIM can be opened
+by supplying it as an optional `pim` parameter to `OpenAsync`; like the password, VeraCrypt does not
+store it in the container and it is never guessed at.
+
 **Filesystems** (via [DiscUtils](https://github.com/LTRData/DiscUtils)):
 - NTFS
 - FAT (FAT16 and FAT32)

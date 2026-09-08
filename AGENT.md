@@ -27,6 +27,8 @@ supported.
 - Supported encryption algorithms: AES, Serpent, Twofish, Camellia, and the cascades AES-Twofish,
   AES-Twofish-Serpent, Serpent-AES, Serpent-Twofish-AES, Twofish-Serpent, Camellia-Serpent.
 - Supported hash algorithms: SHA-512, SHA-256, Whirlpool, BLAKE2s-256.
+- Support opening a container with a non-default PIM (Personal Iterations Multiplier), supplied by
+  the caller - VeraCrypt does not store it in the container.
 - Supported filesystems: NTFS, FAT (FAT16/FAT32), exFAT.
 - Do not implement Kuznyechik or Streebog (GOST algorithms).
 

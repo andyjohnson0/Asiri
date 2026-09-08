@@ -144,6 +144,33 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             HashAlgorithm.Sha512,
             FileSystemType.ExFat);
 
+        /// <summary>
+        /// AES / SHA-512 / exFAT, created with a non-default PIM. Deliberately a small PIM (5, giving
+        /// 20,000 PBKDF2 iterations - see HeaderParser.GetPbkdf2IterationCount) rather than a
+        /// VeraCrypt-realistic one, so this fixture is actually cheaper to open than the 500,000-
+        /// iteration default fixtures, not more expensive.
+        /// </summary>
+        public static readonly ContainerFixture AesPim5ExFat = new ContainerFixture(
+            "AES_SHA-512_EXFAT_PIM5.hc",
+            "(a~ojGZpRQSSlTSzfjPU",
+            CryptoAlgorithm.Aes,
+            HashAlgorithm.Sha512,
+            FileSystemType.ExFat,
+            pim: 5);
+
+        /// <summary>
+        /// AES / Whirlpool / exFAT, created with a non-default PIM (20, giving 35,000 iterations) - a
+        /// different PIM value and a different hash from <see cref="AesPim5ExFat"/>, as an independent
+        /// real-world check of the PIM formula rather than relying on one data point.
+        /// </summary>
+        public static readonly ContainerFixture AesPim20ExFat = new ContainerFixture(
+            "AES_WHIRLPOOL_EXFAT_PIM20.hc",
+            "bZ0VulQNxLOW^CK3k(lr",
+            CryptoAlgorithm.Aes,
+            HashAlgorithm.Whirlpool,
+            FileSystemType.ExFat,
+            pim: 20);
+
         // Add further fixtures here as new (algorithm, filesystem) permutations are supplied, and
         // include them in All() below so shared, filesystem-agnostic tests pick them up
         // automatically.
@@ -171,6 +198,8 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             yield return new object[] { SerpentTwofishAesExFat };
             yield return new object[] { TwofishSerpentExFat };
             yield return new object[] { CamelliaSerpentExFat };
+            yield return new object[] { AesPim5ExFat };
+            yield return new object[] { AesPim20ExFat };
         }
 
         /// <summary>
@@ -187,19 +216,23 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             public HashAlgorithm HashAlgorithm { get; }
             public FileSystemType FilesystemType { get; }
 
-            public ContainerFixture(string fileName, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, FileSystemType filesystemType)
+            /// <summary>The PIM this container was created with, or 0 if it uses the default.</summary>
+            public int Pim { get; }
+
+            public ContainerFixture(string fileName, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, FileSystemType filesystemType, int pim = 0)
             {
                 ContainerFile = new FileInfo(Path.Combine(TestDataDirectory, fileName));
                 Password = password;
                 Algorithm = algorithm;
                 HashAlgorithm = hashAlgorithm;
                 FilesystemType = filesystemType;
+                Pim = pim;
             }
 
             /// <summary>Opens this container via the full public VeraCryptContainer.OpenAsync API.</summary>
             public Task<VeraCryptContainer> OpenAsync()
             {
-                return VeraCryptContainer.OpenAsync(ContainerFile, Password, Algorithm, HashAlgorithm, FilesystemType);
+                return VeraCryptContainer.OpenAsync(ContainerFile, Password, Algorithm, HashAlgorithm, FilesystemType, Pim);
             }
 
             // Used by the xUnit test runner to label [Theory] cases in output; without this, every

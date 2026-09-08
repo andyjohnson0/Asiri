@@ -123,6 +123,11 @@ namespace uk.andyjohnson.Asiri.Core
         /// <param name="algo">The encryption algorithm used by the container.</param>
         /// <param name="hashAlgo">The hash algorithm used to derive keys from the password.</param>
         /// <param name="fsType">The filesystem type used within the container.</param>
+        /// <param name="pim">
+        /// The container's PIM (Personal Iterations Multiplier), or 0 - the default - if none was
+        /// set when the container was created. VeraCrypt does not store the PIM in the header, so it
+        /// must be supplied here, the same way the password is.
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>A container whose <see cref="Root"/> exposes the decrypted filesystem.</returns>
         public static async Task<VeraCryptContainer> OpenAsync(
@@ -131,6 +136,7 @@ namespace uk.andyjohnson.Asiri.Core
             CryptoAlgorithm algo,
             HashAlgorithm hashAlgo,
             FileSystemType fsType,
+            int pim = 0,
             CancellationToken cancellationToken = default)
         {
             if (path == null)
@@ -166,8 +172,12 @@ namespace uk.andyjohnson.Asiri.Core
                 default:
                     throw new ArgumentException($"Unsupported filesystem type: {fsType}.", nameof(fsType));
             }
+            if (pim < 0)
+            {
+                throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
+            }
 
-            var header = await HeaderParser.ParseAsync(path, password, algo, hashAlgo, cancellationToken).ConfigureAwait(false);
+            var header = await HeaderParser.ParseAsync(path, password, algo, hashAlgo, pim, cancellationToken).ConfigureAwait(false);
             var decryptor = await SectorDecryptor.CreateAsync(path, header, cancellationToken).ConfigureAwait(false);
             var stream = new DecryptedBlockDeviceStream(decryptor);
 
@@ -197,7 +207,8 @@ namespace uk.andyjohnson.Asiri.Core
         /// The (algorithm, hash) combination cannot be known in advance: the only way to tell whether
         /// a combination is correct is to derive keys with it and check whether the header's CRC
         /// validates, so that pairing must genuinely be searched. This searches over
-        /// <see cref="HeaderParser.TryDecryptRegionAsync"/> rather than looping <see cref="HeaderParser.ParseAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, CancellationToken)"/>
+        /// <see cref="HeaderParser.TryDecryptRegionAsync"/> rather than looping
+        /// <see cref="HeaderParser.ParseAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, int, CancellationToken)"/>
         /// directly, so the header regions are read from disk once and each combination is tried
         /// against the same bytes, rather than re-opening and re-reading the file per attempt.
         ///
@@ -208,11 +219,19 @@ namespace uk.andyjohnson.Asiri.Core
         /// </remarks>
         /// <param name="path">Path to the VeraCrypt container file.</param>
         /// <param name="password">The container password.</param>
+        /// <param name="pim">
+        /// The container's PIM (Personal Iterations Multiplier), or 0 - the default - if none was
+        /// set when the container was created. Unlike the encryption and hash algorithms, this is
+        /// never searched for - VeraCrypt does not store the PIM in the header, so, exactly like the
+        /// password, it must already be known and supplied by the caller. The same value is used for
+        /// every (algorithm, hash) combination the search tries.
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>A container whose <see cref="Root"/> exposes the decrypted filesystem.</returns>
         public static async Task<VeraCryptContainer> OpenAsync(
             FileInfo path,
             string password,
+            int pim = 0,
             CancellationToken cancellationToken = default)
         {
             if (path == null)
@@ -223,8 +242,12 @@ namespace uk.andyjohnson.Asiri.Core
             {
                 throw new ArgumentNullException(nameof(password));
             }
+            if (pim < 0)
+            {
+                throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
+            }
 
-            var header = await DetectHeaderAsync(path, password, cancellationToken).ConfigureAwait(false);
+            var header = await DetectHeaderAsync(path, password, pim, cancellationToken).ConfigureAwait(false);
             if (header == null)
             {
                 throw new InvalidOperationException(
@@ -255,7 +278,7 @@ namespace uk.andyjohnson.Asiri.Core
         /// match, reading each region from disk only once regardless of how many combinations are
         /// tried.
         /// </summary>
-        private static async Task<VeraCryptHeader> DetectHeaderAsync(FileInfo path, string password, CancellationToken cancellationToken)
+        private static async Task<VeraCryptHeader> DetectHeaderAsync(FileInfo path, string password, int pim, CancellationToken cancellationToken)
         {
             Stream stream;
             try
@@ -270,7 +293,7 @@ namespace uk.andyjohnson.Asiri.Core
             using (stream)
             {
                 var primaryRegion = await HeaderParser.ReadRegionAsync(stream, 0, HeaderParser.HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                var header = await TryAllCombinationsAsync(primaryRegion, password, fromBackup: false, cancellationToken).ConfigureAwait(false);
+                var header = await TryAllCombinationsAsync(primaryRegion, password, fromBackup: false, pim, cancellationToken).ConfigureAwait(false);
                 if (header != null)
                 {
                     return header;
@@ -280,7 +303,7 @@ namespace uk.andyjohnson.Asiri.Core
                 {
                     var backupOffset = stream.Length - HeaderParser.BackupHeaderOffsetFromEnd;
                     var backupRegion = await HeaderParser.ReadRegionAsync(stream, backupOffset, HeaderParser.HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                    header = await TryAllCombinationsAsync(backupRegion, password, fromBackup: true, cancellationToken).ConfigureAwait(false);
+                    header = await TryAllCombinationsAsync(backupRegion, password, fromBackup: true, pim, cancellationToken).ConfigureAwait(false);
                     if (header != null)
                     {
                         return header;
@@ -291,14 +314,14 @@ namespace uk.andyjohnson.Asiri.Core
             return null;
         }
 
-        private static async Task<VeraCryptHeader> TryAllCombinationsAsync(byte[] region, string password, bool fromBackup, CancellationToken cancellationToken)
+        private static async Task<VeraCryptHeader> TryAllCombinationsAsync(byte[] region, string password, bool fromBackup, int pim, CancellationToken cancellationToken)
         {
             foreach (CryptoAlgorithm algo in (CryptoAlgorithm[])Enum.GetValues(typeof(CryptoAlgorithm)))
             {
                 foreach (HashAlgorithm hashAlgo in (HashAlgorithm[])Enum.GetValues(typeof(HashAlgorithm)))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var header = await HeaderParser.TryDecryptRegionAsync(region, password, algo, hashAlgo, fromBackup, cancellationToken).ConfigureAwait(false);
+                    var header = await HeaderParser.TryDecryptRegionAsync(region, password, algo, hashAlgo, fromBackup, pim, cancellationToken).ConfigureAwait(false);
                     if (header != null)
                     {
                         return header;

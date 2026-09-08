@@ -21,7 +21,9 @@ This document takes precedence over all other instructions for the Asiri.Core pr
 
 ## Cryptography Requirements
 - Convert the provided .NET string password to UTF‑8 bytes.
-- Use PBKDF2‑SHA‑512 with VeraCrypt iteration counts.
+- Use PBKDF2 with VeraCrypt's iteration counts, computed from the caller's PIM (Personal Iterations
+  Multiplier) per VeraCrypt's own formula - 0 (the default) if none is supplied. PIM is never stored
+  in the header and never searched for; the caller must supply it, like the password.
 - Derive keys exactly as specified in VeraCrypt documentation.
 - Use XTS mode, built on BouncyCastle's block ciphers, for every supported single cipher and cascade.
 - Implement sector‑based decryption.
@@ -33,7 +35,9 @@ This document takes precedence over all other instructions for the Asiri.Core pr
   - Version fields
   - Sector size
 - If the primary header fails validation, attempt backup header fallback.
-- Do not modify cryptographic parameters, iteration counts, or block sizes.
+- Do not modify cryptographic parameters or block sizes. The PBKDF2 iteration count is the one
+  parameter that legitimately varies, per PIM - see Cryptography Requirements above - not a
+  deviation from this.
 
 ## Container Handling
 - Do not load the entire container into memory.

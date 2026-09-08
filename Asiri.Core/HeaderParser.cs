@@ -34,7 +34,21 @@ namespace uk.andyjohnson.Asiri.Core
         /// </summary>
         public const long BackupHeaderOffsetFromEnd = 131072;
 
-        private const int Pbkdf2Iterations = 500000;
+        /// <summary>
+        /// Computes the PBKDF2 iteration count for the given PIM (Personal Iterations Multiplier),
+        /// per VeraCrypt's own formula for non-boot volumes - verified against VeraCrypt's own source
+        /// (Common/Pkcs5.c, get_pkcs5_iteration_count) rather than assumed. The formula is identical
+        /// across every hash algorithm this library supports for non-boot volumes (SHA-512, SHA-256,
+        /// Whirlpool, BLAKE2s-256; the boot-volume formula, which does differ per hash, is irrelevant
+        /// since Asiri never handles boot/system encryption), so no hash-specific branching is
+        /// needed. PIM 0 - the default when unspecified - and an explicit PIM 485 both yield the same
+        /// 500,000 iterations; VeraCrypt's own mount dialog displays 485 as PIM 0's "equivalent" value
+        /// for exactly this reason.
+        /// </summary>
+        private static int GetPbkdf2IterationCount(int pim)
+        {
+            return pim == 0 ? 500000 : 15000 + pim * 1000;
+        }
 
         /// <summary>
         /// The number of bits of header key material required per cascade component: a 256-bit
@@ -56,15 +70,20 @@ namespace uk.andyjohnson.Asiri.Core
         /// <param name="password">The container password.</param>
         /// <param name="algorithm">The encryption algorithm used by the container.</param>
         /// <param name="hashAlgorithm">The hash algorithm used to derive keys from the password.</param>
+        /// <param name="pim">
+        /// The container's PIM (Personal Iterations Multiplier), or 0 - the default - if none was
+        /// set when the container was created. VeraCrypt does not store the PIM in the header, so it
+        /// must be supplied by the caller, the same way the password is; it is never searched for.
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>The decrypted and validated volume header.</returns>
-        public static Task<VeraCryptHeader> ParseAsync(string path, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, CancellationToken cancellationToken = default)
+        public static Task<VeraCryptHeader> ParseAsync(string path, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, int pim = 0, CancellationToken cancellationToken = default)
         {
             if (path == null)
             {
                 throw new ArgumentNullException(nameof(path));
             }
-            return ParseAsync(new FileInfo(path), password, algorithm, hashAlgorithm, cancellationToken);
+            return ParseAsync(new FileInfo(path), password, algorithm, hashAlgorithm, pim, cancellationToken);
         }
 
         /// <summary>
@@ -75,9 +94,14 @@ namespace uk.andyjohnson.Asiri.Core
         /// <param name="password">The container password.</param>
         /// <param name="algorithm">The encryption algorithm used by the container.</param>
         /// <param name="hashAlgorithm">The hash algorithm used to derive keys from the password.</param>
+        /// <param name="pim">
+        /// The container's PIM (Personal Iterations Multiplier), or 0 - the default - if none was
+        /// set when the container was created. VeraCrypt does not store the PIM in the header, so it
+        /// must be supplied by the caller, the same way the password is; it is never searched for.
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>The decrypted and validated volume header.</returns>
-        public static Task<VeraCryptHeader> ParseAsync(FileInfo path, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, CancellationToken cancellationToken = default)
+        public static Task<VeraCryptHeader> ParseAsync(FileInfo path, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, int pim = 0, CancellationToken cancellationToken = default)
         {
             if (path == null)
             {
@@ -91,11 +115,15 @@ namespace uk.andyjohnson.Asiri.Core
             {
                 throw new ArgumentException($"Container file not found: {path.FullName}", nameof(path));
             }
+            if (pim < 0)
+            {
+                throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
+            }
 
-            return ParseAsyncCore(path, password, algorithm, hashAlgorithm, cancellationToken);
+            return ParseAsyncCore(path, password, algorithm, hashAlgorithm, pim, cancellationToken);
         }
 
-        private static async Task<VeraCryptHeader> ParseAsyncCore(FileInfo path, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, CancellationToken cancellationToken)
+        private static async Task<VeraCryptHeader> ParseAsyncCore(FileInfo path, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, int pim, CancellationToken cancellationToken)
         {
             Stream stream;
             try
@@ -110,7 +138,7 @@ namespace uk.andyjohnson.Asiri.Core
             using (stream)
             {
                 var primaryRegion = await ReadRegionAsync(stream, 0, HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                var header = await TryDecryptRegionAsync(primaryRegion, password, algorithm, hashAlgorithm, fromBackup: false, cancellationToken).ConfigureAwait(false);
+                var header = await TryDecryptRegionAsync(primaryRegion, password, algorithm, hashAlgorithm, fromBackup: false, pim, cancellationToken).ConfigureAwait(false);
                 if (header != null)
                 {
                     return header;
@@ -120,7 +148,7 @@ namespace uk.andyjohnson.Asiri.Core
                 {
                     var backupOffset = stream.Length - BackupHeaderOffsetFromEnd;
                     var backupRegion = await ReadRegionAsync(stream, backupOffset, HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                    header = await TryDecryptRegionAsync(backupRegion, password, algorithm, hashAlgorithm, fromBackup: true, cancellationToken).ConfigureAwait(false);
+                    header = await TryDecryptRegionAsync(backupRegion, password, algorithm, hashAlgorithm, fromBackup: true, pim, cancellationToken).ConfigureAwait(false);
                     if (header != null)
                     {
                         return header;
@@ -153,9 +181,13 @@ namespace uk.andyjohnson.Asiri.Core
         /// <param name="algorithm">The encryption algorithm to decrypt the header with.</param>
         /// <param name="hashAlgorithm">The hash algorithm to derive keys from the password with.</param>
         /// <param name="fromBackup">Whether this region was read from the backup header location.</param>
+        /// <param name="pim">
+        /// The container's PIM (Personal Iterations Multiplier), or 0 - the default - if none was
+        /// set when the container was created.
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>The decrypted and validated header, or null if it did not validate.</returns>
-        public static Task<VeraCryptHeader> TryDecryptRegionAsync(byte[] region, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, bool fromBackup, CancellationToken cancellationToken = default)
+        public static Task<VeraCryptHeader> TryDecryptRegionAsync(byte[] region, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, bool fromBackup, int pim = 0, CancellationToken cancellationToken = default)
         {
             if (region == null)
             {
@@ -169,9 +201,13 @@ namespace uk.andyjohnson.Asiri.Core
             {
                 throw new ArgumentException($"Region must be exactly {HeaderRegionSize} bytes.", nameof(region));
             }
+            if (pim < 0)
+            {
+                throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
+            }
 
             var passwordBytes = Encoding.UTF8.GetBytes(password);
-            return TryDecryptAndValidateAsync(region, passwordBytes, algorithm, hashAlgorithm, fromBackup, cancellationToken);
+            return TryDecryptAndValidateAsync(region, passwordBytes, algorithm, hashAlgorithm, fromBackup, pim, cancellationToken);
         }
 
         internal static Task<byte[]> ReadRegionAsync(Stream stream, long offset, int length, CancellationToken cancellationToken)
@@ -205,7 +241,7 @@ namespace uk.andyjohnson.Asiri.Core
             return buffer;
         }
 
-        private static Task<VeraCryptHeader> TryDecryptAndValidateAsync(byte[] region, byte[] passwordBytes, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, bool fromBackup, CancellationToken cancellationToken)
+        private static Task<VeraCryptHeader> TryDecryptAndValidateAsync(byte[] region, byte[] passwordBytes, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, bool fromBackup, int pim, CancellationToken cancellationToken)
         {
             return Task.Run(() =>
             {
@@ -215,10 +251,11 @@ namespace uk.andyjohnson.Asiri.Core
                 var componentCount = CascadeDefinitions.GetComponentCount(algorithm);
                 var keyMaterialSize = CascadeDefinitions.ComponentKeySize * componentCount;
 
-                // PBKDF2 (500,000 iterations) is the most expensive step in this whole pipeline, so
-                // cancellation is checked immediately before it, not just once at the top of the task.
+                // PBKDF2 - by far the most expensive step in this whole pipeline, more so still for a
+                // large PIM - so cancellation is checked immediately before it, not just once at the
+                // top of the task.
                 cancellationToken.ThrowIfCancellationRequested();
-                var headerKey = DeriveHeaderKey(passwordBytes, salt, hashAlgorithm, componentCount);
+                var headerKey = DeriveHeaderKey(passwordBytes, salt, hashAlgorithm, componentCount, pim);
 
                 // The derived key is laid out as all components' cipher keys concatenated, followed
                 // by all components' tweak keys concatenated - see CascadeDefinitions and
@@ -239,9 +276,9 @@ namespace uk.andyjohnson.Asiri.Core
             }, cancellationToken);
         }
 
-        private static byte[] DeriveHeaderKey(byte[] passwordBytes, byte[] salt, HashAlgorithm hashAlgorithm, int componentCount)
+        private static byte[] DeriveHeaderKey(byte[] passwordBytes, byte[] salt, HashAlgorithm hashAlgorithm, int componentCount, int pim)
         {
-            return Pbkdf2KeyDerivation.DeriveKey(hashAlgorithm, passwordBytes, salt, Pbkdf2Iterations, ComponentKeyLengthBits * componentCount);
+            return Pbkdf2KeyDerivation.DeriveKey(hashAlgorithm, passwordBytes, salt, GetPbkdf2IterationCount(pim), ComponentKeyLengthBits * componentCount);
         }
 
         private static VeraCryptHeader ValidateAndBuildHeader(byte[] d, CryptoAlgorithm algorithm, bool fromBackup)
