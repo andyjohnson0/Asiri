@@ -30,11 +30,10 @@ Pre-release, version `0.1.0`. The public API may still change.
 Asiri implements the subset of the VeraCrypt volume format needed to open a standard, non-system
 container file and read its contents.
 
-**Encryption algorithms** (single-cipher, XTS mode, 256-bit keys / 128-bit blocks):
-- AES
-- Serpent
-- Twofish
-- Camellia
+**Encryption algorithms** (XTS mode, 256-bit keys / 128-bit blocks):
+- AES, Serpent, Twofish, Camellia (single cipher)
+- AES-Twofish, AES-Twofish-Serpent, Serpent-AES, Serpent-Twofish-AES, Twofish-Serpent,
+  Camellia-Serpent (cascades of two or three ciphers)
 
 **Hash algorithms** (PBKDF2 key derivation):
 - SHA-512
@@ -50,9 +49,9 @@ container file and read its contents.
 **Not supported, by design:**
 - Writing to a container — Asiri is read-only.
 - Hidden volumes.
-- Cascaded ciphers (e.g. AES-Twofish-Serpent) — only single ciphers.
 - Encrypted partitions or drives — only container *files*.
-- The Kuznyechik cipher or Streebog hash (GOST algorithms).
+- The Kuznyechik cipher or Streebog hash (GOST algorithms), including every cascade involving
+  Kuznyechik (Camellia-Kuznyechik, Kuznyechik-AES, Kuznyechik-Serpent-Camellia, Kuznyechik-Twofish).
 
 All cryptographic primitives are provided by [BouncyCastle](https://github.com/bcgit/bc-csharp) —
 Asiri does not implement its own cryptography, only the VeraCrypt-specific header parsing, key

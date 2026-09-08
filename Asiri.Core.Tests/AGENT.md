@@ -13,6 +13,17 @@ This document takes precedence over all other instructions for the Asiri.Core.Te
   - Member variables prefixed with `_`
 - Use minimal in‑code comments.
 
+## Test Categories
+- Tests that are genuinely slow because they do real, repeated PBKDF2 work at production iteration
+  counts - brute-force algorithm/hash detection in particular - must be tagged
+  `[Trait("Category", "Integration")]`. This does not replace choosing efficient test data (e.g. a
+  small, deliberately-chosen representative subset of containers rather than every fixture); it is
+  for the residual cost that remains genuinely necessary, such as a test whose entire point is to
+  exhaust the full real search space.
+- The everyday/default run excludes them: `dotnet test --filter "Category!=Integration"`.
+- Run them explicitly - e.g. before a release, or in a slower CI job - with
+  `dotnet test --filter "Category=Integration"`, or `dotnet test` with no filter for everything.
+
 ## Dependencies
 - Use xUnit for tests.
 - DiscUtils packages may be referenced directly, where a test needs to exercise DiscUtils' own API against Asiri.Core's stream, independent of the IDirectory/IFile abstraction (Asiri.Abstractions).
