@@ -106,13 +106,14 @@ namespace uk.andyjohnson.Asiri.Core
 
         private VeraCryptContainer(
             DecryptedBlockDeviceStream stream, DiscFileSystem fileSystem, ContainerLifetime lifetime, IDirectory root,
-            CryptoAlgorithm algorithm, FileSystemType fileSystemType)
+            CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, FileSystemType fileSystemType)
         {
             _stream = stream;
             _fileSystem = fileSystem;
             _lifetime = lifetime;
             Root = root;
             Algorithm = algorithm;
+            HashAlgorithm = hashAlgorithm;
             FileSystemType = fileSystemType;
         }
 
@@ -192,7 +193,7 @@ namespace uk.andyjohnson.Asiri.Core
             {
                 var lifetime = new ContainerLifetime();
                 var (fileSystem, root) = await OpenFileSystemAsync(fsType, stream, lifetime, cancellationToken).ConfigureAwait(false);
-                return new VeraCryptContainer(stream, fileSystem, lifetime, root, algo, fsType);
+                return new VeraCryptContainer(stream, fileSystem, lifetime, root, algo, hashAlgo, fsType);
             }
             catch
             {
@@ -276,7 +277,7 @@ namespace uk.andyjohnson.Asiri.Core
                 var fsType = await DetectFileSystemTypeAsync(decryptor, cancellationToken).ConfigureAwait(false);
                 var lifetime = new ContainerLifetime();
                 var (fileSystem, root) = await OpenFileSystemAsync(fsType, stream, lifetime, cancellationToken).ConfigureAwait(false);
-                return new VeraCryptContainer(stream, fileSystem, lifetime, root, header.Algorithm, fsType);
+                return new VeraCryptContainer(stream, fileSystem, lifetime, root, header.Algorithm, header.HashAlgorithm, fsType);
             }
             catch
             {
@@ -481,15 +482,22 @@ namespace uk.andyjohnson.Asiri.Core
 
         /// <summary>
         /// The encryption algorithm the container was opened with - either as given to the
-        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, CancellationToken)"/>,
-        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, CancellationToken)"/>.
+        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, CancellationToken)"/>,
+        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CancellationToken)"/>.
         /// </summary>
         public CryptoAlgorithm Algorithm { get; private set; }
 
         /// <summary>
+        /// The hash algorithm the container was opened with - either as given to the
+        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, CancellationToken)"/>,
+        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CancellationToken)"/>.
+        /// </summary>
+        public HashAlgorithm HashAlgorithm { get; private set; }
+
+        /// <summary>
         /// The filesystem type detected within the container - either as given to the
-        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, CancellationToken)"/>,
-        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, CancellationToken)"/>.
+        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, CancellationToken)"/>,
+        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CancellationToken)"/>.
         /// </summary>
         public FileSystemType FileSystemType { get; private set; }
 

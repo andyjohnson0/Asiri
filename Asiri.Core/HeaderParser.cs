@@ -286,7 +286,7 @@ namespace uk.andyjohnson.Asiri.Core
                 cancellationToken.ThrowIfCancellationRequested();
                 var decrypted = XtsCipherSelector.Decrypt(algorithm, encryptedHeader, headerCipherKey, headerTweakKey, dataUnitNumber: 0);
 
-                return ValidateAndBuildHeader(decrypted, algorithm, fromBackup);
+                return ValidateAndBuildHeader(decrypted, algorithm, hashAlgorithm, fromBackup);
             }, cancellationToken);
         }
 
@@ -295,7 +295,7 @@ namespace uk.andyjohnson.Asiri.Core
             return Pbkdf2KeyDerivation.DeriveKey(hashAlgorithm, passwordBytes, salt, GetPbkdf2IterationCount(pim), ComponentKeyLengthBits * componentCount);
         }
 
-        private static VeraCryptHeader ValidateAndBuildHeader(byte[] d, CryptoAlgorithm algorithm, bool fromBackup)
+        private static VeraCryptHeader ValidateAndBuildHeader(byte[] d, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, bool fromBackup)
         {
             var magic = Encoding.ASCII.GetString(d, 0, 4);
             if (magic != ExpectedMagic)
@@ -337,6 +337,7 @@ namespace uk.andyjohnson.Asiri.Core
             return new VeraCryptHeader
             {
                 Algorithm = algorithm,
+                HashAlgorithm = hashAlgorithm,
                 Magic = magic,
                 Version = version,
                 MinRequiredVersion = ReadUInt16BE(d, 6),

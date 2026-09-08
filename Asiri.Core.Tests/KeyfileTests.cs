@@ -151,6 +151,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             try
             {
                 Assert.Equal(fixture.Algorithm, container.Algorithm);
+                Assert.Equal(fixture.HashAlgorithm, container.HashAlgorithm);
                 var testTxt = await container.Root.GetFileAsync("test.txt");
                 Assert.Equal("Hello, world!", await testTxt.ReadAllTextAsync());
             }

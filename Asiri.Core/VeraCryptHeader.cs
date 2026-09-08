@@ -15,6 +15,12 @@ namespace uk.andyjohnson.Asiri.Core
         public CryptoAlgorithm Algorithm { get; internal set; }
 
         /// <summary>
+        /// The hash algorithm used to derive keys from the password for this header, via PBKDF2.
+        /// Carried on the header for the same reason as <see cref="Algorithm"/>.
+        /// </summary>
+        public HashAlgorithm HashAlgorithm { get; internal set; }
+
+        /// <summary>
         /// The 4-character magic string identifying a VeraCrypt volume header. Expected value is "VERA".
         /// </summary>
         public string Magic { get; internal set; } = string.Empty;

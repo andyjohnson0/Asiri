@@ -51,6 +51,25 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             }
         }
 
+        [Theory]
+        [MemberData(nameof(TestContainers.All), MemberType = typeof(TestContainers))]
+        public async Task OpenAsync_WithCorrectPassword_SetsAlgorithmAndHashAlgorithmOnContainer(TestContainers.ContainerFixture fixture)
+        {
+            // Algorithm and HashAlgorithm are given directly by the caller on this (explicit-
+            // parameters) overload, but were previously never actually asserted back on the returned
+            // container - this closes that gap for both properties in one pass.
+            var container = await fixture.OpenAsync();
+            try
+            {
+                Assert.Equal(fixture.Algorithm, container.Algorithm);
+                Assert.Equal(fixture.HashAlgorithm, container.HashAlgorithm);
+            }
+            finally
+            {
+                container.Close();
+            }
+        }
+
         [Fact]
         public async Task OpenAsync_NullPath_ThrowsArgumentNullException()
         {

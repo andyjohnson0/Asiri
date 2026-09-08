@@ -98,6 +98,14 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         }
 
         [Fact]
+        public async Task ParseAsync_ValidContainer_SetsHashAlgorithmOnHeader()
+        {
+            var header = await HeaderParser.ParseAsync(TestContainers.AesNtfs.ContainerFile, TestContainers.AesNtfs.Password, TestContainers.AesNtfs.Algorithm, TestContainers.AesNtfs.HashAlgorithm);
+
+            Assert.Equal(TestContainers.AesNtfs.HashAlgorithm, header.HashAlgorithm);
+        }
+
+        [Fact]
         public async Task ParseAsync_SerpentContainer_DecryptsAndSetsAlgorithmOnHeader()
         {
             var header = await HeaderParser.ParseAsync(
