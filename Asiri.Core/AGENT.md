@@ -56,7 +56,11 @@ This document takes precedence over all other instructions for the Asiri.Core pr
 ## Filesystem Requirements
 - Use DiscUtils to interpret the decrypted block‑device stream, for each supported filesystem type (NTFS, FAT, exFAT).
 - Do not implement filesystem primitives yourself.
-- Implement `IDirectory` and `IFile`.
+- Implement `IDirectory` and `IFile`, including their `Path`, `Parent`, attribute, and timestamp
+  members (`IFileSystemEntry`), `IDirectory`'s `EnumerateFilesAsync`/`EnumerateDirectoriesAsync`,
+  and `IFile.OpenReadAsync`.
+- Each of the three filesystem backends (NTFS, FAT, exFAT) implements these independently, matching
+  the existing pattern (no shared base class between the NTFS/FAT/exFAT directory or file wrappers).
 - Expose the filesystem via `VeraCryptContainer.Root`.
 
 ## API Requirements

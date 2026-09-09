@@ -30,7 +30,9 @@ This document takes precedence over all other instructions for the Asiri.Core.Te
 - Do not add any other dependencies without explicit permission.
 
 ## Test Containers
-Test containers live in `Test Data`. Each has its own, independent password.
+Test containers live in `Test Data`. Each has its own, independent password. Passwords are non-confidential (test-only) and may be embedded in the test code.
+
+### Encryption Test Containers
 
 | File name                            | Encryption          | Hash        | Pim | Filesystem | Password                                                                         | Keyfile(s)                    |
 |--------------------------------------|---------------------|-------------|-----|------------|----------------------------------------------------------------------------------|-------------------------------|
@@ -60,8 +62,28 @@ Test containers live in `Test Data`. Each has its own, independent password.
 | AES_SHA-512_EXFAT_KF1_KF2.hc         | AES                 | SHA-512     |     | exFAT      | eCn8nAr-eK0tLhj)ceFP                                                             | Keyfile1.bin and Keyfile2.bin |
 | AES_SHA-512_EXFAT_KF1_LONGPW.hc      | AES                 | SHA-512     |     | exFAT      | ~wacqaRl)mfCtNY>IGT%nhL~SLzHWW%9iPnHgPQt6Wj8s1F9(w=Jc<4<1pSaUkd%UTD4)-1h~KJAmhTq | Keyfile1.bin                  |
 
-Passwords above are non-confidential (test-only) and may be embedded in the test code.
 All of these encryption algorithms use 256‑bit keys and 128‑bit blocks, and all operate in XTS mode
+
+Structure:
+- test.txt — contents: "Hello, world!"
+- data/ 
+  - subtest.txt containing "This is a test."
+  - image.png
+
+
+### File System Test Containers
+
+AES_SHA-512_EXFAT_ATTRS.hc 
+— AES / SHA-512 / exFAT 
+— password ZlWjwD>EW)RP76IiMKfz
+- Structure:
+  - test.txt — standard content, default attributes.
+  - readonly.txt — small known content, ReadOnly attribute (attrib +r).
+  - hidden.txt — Hidden attribute (attrib +h).
+  - system.txt — System attribute (attrib +s).
+  - data/ — standard, containing subtest.txt + image.png.
+  - other/ — a second top-level subdirectory, containing five files.
+
 
 ## Verification Checklist
 Every test container shares the same file/directory layout. Verify:

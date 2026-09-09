@@ -229,6 +229,22 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             FileSystemType.ExFat,
             keyFiles: new[] { KeyFile("Keyfile1.bin") });
 
+        /// <summary>
+        /// AES / SHA-512 / exFAT, built specifically for filesystem-abstraction tests (Path, Parent,
+        /// attributes, timestamps, EnumerateFilesAsync/EnumerateDirectoriesAsync search patterns).
+        /// Root also contains "System Volume Information" and "$RECYCLE.BIN", both Hidden+System
+        /// directories created automatically by Windows when the container was mounted - real,
+        /// unplanned extra data, left in deliberately rather than cleaned up, since it's a genuine
+        /// (if incidental) example of hidden/system entries no test asked for. See
+        /// AGENT.md for the full structure.
+        /// </summary>
+        public static readonly ContainerFixture AesAttrsExFat = new ContainerFixture(
+            "AES_SHA-512_EXFAT_ATTRS.hc",
+            "ZlWjwD>EW)RP76IiMKfz",
+            CryptoAlgorithm.Aes,
+            HashAlgorithm.Sha512,
+            FileSystemType.ExFat);
+
         // Add further fixtures here as new (algorithm, filesystem) permutations are supplied, and
         // include them in All() below so shared, filesystem-agnostic tests pick them up
         // automatically.
@@ -262,6 +278,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             yield return new object[] { AesKf1EmptyPasswordExFat };
             yield return new object[] { AesKf1Kf2ExFat };
             yield return new object[] { AesKf1LongPasswordExFat };
+            yield return new object[] { AesAttrsExFat };
         }
 
         /// <summary>

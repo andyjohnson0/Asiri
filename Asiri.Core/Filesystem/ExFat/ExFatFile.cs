@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -33,6 +34,63 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.ExFat
                 _lifetime.ThrowIfClosed();
                 return ExFatPathHelper.GetLeafName(_path);
             }
+        }
+
+        /// <inheritdoc />
+        public string Path
+        {
+            get
+            {
+                _lifetime.ThrowIfClosed();
+                return _path;
+            }
+        }
+
+        /// <inheritdoc />
+        public IDirectory Parent
+        {
+            get
+            {
+                _lifetime.ThrowIfClosed();
+                var parentPath = ExFatPathHelper.GetParentPath(_path);
+                return parentPath == null ? null : new ExFatDirectory(_exFat, parentPath, _lifetime);
+            }
+        }
+
+        /// <inheritdoc />
+        public Task<FileAttributes> GetAttributesAsync(CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                return _exFat.GetAttributes(_path);
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task<DateTime> GetCreationTimeUtcAsync(CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                return _exFat.GetCreationTimeUtc(_path);
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task<DateTime> GetLastWriteTimeUtcAsync(CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                return _exFat.GetLastWriteTimeUtc(_path);
+            }, cancellationToken);
         }
 
         /// <inheritdoc />
@@ -78,6 +136,19 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.ExFat
         {
             var bytes = await ReadAllBytesAsync(cancellationToken).ConfigureAwait(false);
             return Encoding.UTF8.GetString(bytes);
+        }
+
+        /// <inheritdoc />
+        public Task<Stream> OpenReadAsync(CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                return (Stream)_exFat.OpenFile(_path, FileMode.Open, FileAccess.Read);
+            }, cancellationToken);
         }
     }
 }

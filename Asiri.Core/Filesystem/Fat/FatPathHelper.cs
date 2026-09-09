@@ -32,5 +32,22 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.Fat
                 ? directoryPath + name
                 : directoryPath + "\\" + name;
         }
+
+        /// <summary>
+        /// Gets the path of the directory containing <paramref name="path"/>, e.g.
+        /// "\data\subtest.txt" -> "\data", "\data" -> "\" (the root). Returns null if
+        /// <paramref name="path"/> is already the root path, which has no parent.
+        /// </summary>
+        public static string GetParentPath(string path)
+        {
+            var trimmed = path.TrimEnd('\\');
+            if (trimmed.Length == 0)
+            {
+                return null;
+            }
+
+            var lastSeparator = trimmed.LastIndexOf('\\');
+            return lastSeparator <= 0 ? Root : trimmed.Substring(0, lastSeparator);
+        }
     }
 }

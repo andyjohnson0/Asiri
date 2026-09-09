@@ -55,6 +55,12 @@ supported — only explicitly-supplied individual files.
 - FAT (FAT16 and FAT32)
 - exFAT
 
+**Filesystem metadata and navigation** — beyond listing and reading files, `IFileSystemEntry`
+exposes `Path`, `Parent`, `GetAttributesAsync()` (read-only, hidden, system, etc), and
+`GetCreationTimeUtcAsync()`/`GetLastWriteTimeUtcAsync()`; `IDirectory` adds `EnumerateFilesAsync()`/
+`EnumerateDirectoriesAsync()` with an optional search pattern; `IFile` adds `OpenReadAsync()` for
+streaming a large file's contents instead of buffering it all via `ReadAllBytesAsync()`.
+
 **Not supported, by design:**
 - Writing to a container — Asiri is read-only.
 - Hidden volumes.

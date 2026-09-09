@@ -1,3 +1,4 @@
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -25,5 +26,14 @@ namespace uk.andyjohnson.Asiri.Abstractions
         /// </summary>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         Task<string> ReadAllTextAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Opens a read-only stream over the file's decrypted contents, for callers that want to
+        /// read a large file incrementally rather than buffering it all at once via
+        /// <see cref="ReadAllBytesAsync"/>. The returned stream becomes unusable if the container is
+        /// closed while it is still open.
+        /// </summary>
+        /// <param name="cancellationToken">A token to cancel the operation.</param>
+        Task<Stream> OpenReadAsync(CancellationToken cancellationToken = default);
     }
 }

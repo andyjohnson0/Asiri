@@ -28,5 +28,25 @@ namespace uk.andyjohnson.Asiri.Abstractions
         /// <param name="name">The name of the file, without any path.</param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         Task<IFile> GetFileAsync(string name, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Lists the files directly contained in this directory whose name matches
+        /// <paramref name="searchPattern"/>.
+        /// </summary>
+        /// <param name="searchPattern">
+        /// A search pattern (e.g. "*.txt"). Defaults to "*", matching every file.
+        /// </param>
+        /// <param name="cancellationToken">A token to cancel the operation.</param>
+        Task<IEnumerable<IFile>> EnumerateFilesAsync(string searchPattern = "*", CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Lists the subdirectories directly contained in this directory whose name matches
+        /// <paramref name="searchPattern"/>.
+        /// </summary>
+        /// <param name="searchPattern">
+        /// A search pattern (e.g. "data*"). Defaults to "*", matching every subdirectory.
+        /// </param>
+        /// <param name="cancellationToken">A token to cancel the operation.</param>
+        Task<IEnumerable<IDirectory>> EnumerateDirectoriesAsync(string searchPattern = "*", CancellationToken cancellationToken = default);
     }
 }
