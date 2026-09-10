@@ -21,9 +21,17 @@ container access only — it will never write to a container — but you should 
 do not use it as your only means of accessing data you care about, and do not rely on it in any
 security-critical context without your own review.
 
+One thing that is independent of the agent: every real VeraCrypt container in
+`Asiri.Core.Tests/Test Data` was created using the actual VeraCrypt application, by Andrew, not
+generated or shaped by the agent. The agent never had the ability to make a test container's
+ciphertext agree with its own understanding of the format. As a result, mutating any test
+container's bytes and re-running the test suite will produce failures — a simple, independent check
+that the tests are exercising real decryption against real VeraCrypt output, not just checking the
+code's assumptions against themselves.
+
 ## Status
 
-Pre-release, version `0.1.0`. The public API may still change.
+Pre-release, version `0.2.0`. The public API may still change.
 
 ## What's supported
 
@@ -115,7 +123,7 @@ If you already know the container's algorithm, hash, and filesystem type, an ove
 |---|---|
 | [`Asiri.Abstractions`](Asiri.Abstractions) | Dependency-free filesystem contracts (`IDirectory`, `IFile`, `IFileSystemEntry`). Depends on nothing, so other software can target these interfaces without pulling in BouncyCastle or DiscUtils. |
 | [`Asiri.Core`](Asiri.Core) | The library itself: VeraCrypt header parsing (`HeaderParser`), sector-level decryption (`SectorDecryptor`, `DecryptedBlockDeviceStream`), the cipher and hash implementations (under `Crypto/`), the DiscUtils-backed filesystem adapters (under `Filesystem/`), and the public entry point, `VeraCryptContainer`. |
-| [`Asiri.Core.Tests`](Asiri.Core.Tests) | xUnit tests, run against real VeraCrypt container files checked into `Asiri.Core.Tests/Test Data` — one per supported cipher/hash/filesystem combination — as well as synthetic, from-scratch header tests independent of the library's own crypto code. |
+| [`Asiri.Core.Tests`](Asiri.Core.Tests) | xUnit tests, run against real VeraCrypt container files checked into `Asiri.Core.Tests/Test Data` — covering every supported cipher/cascade, hash, filesystem, PIM, and keyfile combination — as well as synthetic, from-scratch header tests independent of the library's own crypto code. |
 | [`Asiri.ContainerBrowser`](Asiri.ContainerBrowser) | A small WPF reference application: open a container, browse its folder tree, and view text files, images, or a hex dump of anything else. Demonstrates `Asiri.Core` as a consumer would use it. |
 
 Each project has its own `AGENT.md` describing the scope and conventions the agent worked to.
