@@ -15,6 +15,12 @@ namespace uk.andyjohnson.Asiri.Core
         public CryptoAlgorithm Algorithm { get; internal set; }
 
         /// <summary>
+        /// The hash algorithm used to derive keys from the password for this header, via PBKDF2.
+        /// Carried on the header for the same reason as <see cref="Algorithm"/>.
+        /// </summary>
+        public HashAlgorithm HashAlgorithm { get; internal set; }
+
+        /// <summary>
         /// The 4-character magic string identifying a VeraCrypt volume header. Expected value is "VERA".
         /// </summary>
         public string Magic { get; internal set; } = string.Empty;
@@ -60,12 +66,16 @@ namespace uk.andyjohnson.Asiri.Core
         public int SectorSize { get; internal set; }
 
         /// <summary>
-        /// The primary master key used for AES-XTS data encryption.
+        /// The primary master key used for XTS data encryption. For a cascade, this is every
+        /// component cipher's 256-bit data key concatenated together, in the cascade's key-segment
+        /// order (see <see cref="Crypto.CascadeDefinitions"/>) - 32 bytes for a single cipher, up to
+        /// 96 bytes for a three-cipher cascade.
         /// </summary>
         public byte[] MasterKey { get; internal set; } = Array.Empty<byte>();
 
         /// <summary>
-        /// The secondary master key used for AES-XTS tweak encryption.
+        /// The secondary master key used for XTS tweak encryption. Laid out the same way as
+        /// <see cref="MasterKey"/>, one 256-bit tweak key per component cipher.
         /// </summary>
         public byte[] SecondaryKey { get; internal set; } = Array.Empty<byte>();
 

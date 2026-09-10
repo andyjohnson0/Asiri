@@ -21,20 +21,27 @@ container access only — it will never write to a container — but you should 
 do not use it as your only means of accessing data you care about, and do not rely on it in any
 security-critical context without your own review.
 
+One thing that is independent of the agent: every real VeraCrypt container in
+`Asiri.Core.Tests/Test Data` was created using the actual VeraCrypt application, by Andrew, not
+generated or shaped by the agent. The agent never had the ability to make a test container's
+ciphertext agree with its own understanding of the format. As a result, mutating any test
+container's bytes and re-running the test suite will produce failures — a simple, independent check
+that the tests are exercising real decryption against real VeraCrypt output, not just checking the
+code's assumptions against themselves.
+
 ## Status
 
-Pre-release, version `0.1.0`. The public API may still change.
+Pre-release, version `0.2.0`. The public API may still change.
 
 ## What's supported
 
 Asiri implements the subset of the VeraCrypt volume format needed to open a standard, non-system
 container file and read its contents.
 
-**Encryption algorithms** (single-cipher, XTS mode, 256-bit keys / 128-bit blocks):
-- AES
-- Serpent
-- Twofish
-- Camellia
+**Encryption algorithms** (XTS mode, 256-bit keys / 128-bit blocks):
+- AES, Serpent, Twofish, Camellia (single cipher)
+- AES-Twofish, AES-Twofish-Serpent, Serpent-AES, Serpent-Twofish-AES, Twofish-Serpent,
+  Camellia-Serpent (cascades of two or three ciphers)
 
 **Hash algorithms** (PBKDF2 key derivation):
 - SHA-512
@@ -42,17 +49,33 @@ container file and read its contents.
 - Whirlpool
 - BLAKE2s-256
 
+**PIM** (Personal Iterations Multiplier) — a container created with a non-default PIM can be opened
+by supplying it as an optional `pim` parameter to `OpenAsync`; like the password, VeraCrypt does not
+store it in the container and it is never guessed at.
+
+**Keyfiles** — one or more ordinary files can be supplied as an optional `keyFiles` parameter to
+`OpenAsync`, mixed into the password exactly as VeraCrypt itself does, including keyfile-only
+containers (an empty password). Security tokens/smart cards and folder-of-keyfiles are not
+supported — only explicitly-supplied individual files.
+
 **Filesystems** (via [DiscUtils](https://github.com/LTRData/DiscUtils)):
 - NTFS
 - FAT (FAT16 and FAT32)
 - exFAT
 
+**Filesystem metadata and navigation** — beyond listing and reading files, `IFileSystemEntry`
+exposes `Path`, `Parent`, `GetAttributesAsync()` (read-only, hidden, system, etc), and
+`GetCreationTimeUtcAsync()`/`GetLastWriteTimeUtcAsync()`; `IDirectory` adds `EnumerateFilesAsync()`/
+`EnumerateDirectoriesAsync()` with an optional search pattern; `IFile` adds `OpenReadAsync()` for
+streaming a large file's contents instead of buffering it all via `ReadAllBytesAsync()`.
+
 **Not supported, by design:**
 - Writing to a container — Asiri is read-only.
 - Hidden volumes.
-- Cascaded ciphers (e.g. AES-Twofish-Serpent) — only single ciphers.
 - Encrypted partitions or drives — only container *files*.
-- The Kuznyechik cipher or Streebog hash (GOST algorithms).
+- The Kuznyechik cipher or Streebog hash (GOST algorithms), including every cascade involving
+  Kuznyechik (Camellia-Kuznyechik, Kuznyechik-AES, Kuznyechik-Serpent-Camellia, Kuznyechik-Twofish).
+- Security tokens / smart cards (PKCS#11) as a keyfile source.
 
 All cryptographic primitives are provided by [BouncyCastle](https://github.com/bcgit/bc-csharp) —
 Asiri does not implement its own cryptography, only the VeraCrypt-specific header parsing, key
@@ -100,7 +123,7 @@ If you already know the container's algorithm, hash, and filesystem type, an ove
 |---|---|
 | [`Asiri.Abstractions`](Asiri.Abstractions) | Dependency-free filesystem contracts (`IDirectory`, `IFile`, `IFileSystemEntry`). Depends on nothing, so other software can target these interfaces without pulling in BouncyCastle or DiscUtils. |
 | [`Asiri.Core`](Asiri.Core) | The library itself: VeraCrypt header parsing (`HeaderParser`), sector-level decryption (`SectorDecryptor`, `DecryptedBlockDeviceStream`), the cipher and hash implementations (under `Crypto/`), the DiscUtils-backed filesystem adapters (under `Filesystem/`), and the public entry point, `VeraCryptContainer`. |
-| [`Asiri.Core.Tests`](Asiri.Core.Tests) | xUnit tests, run against real VeraCrypt container files checked into `Asiri.Core.Tests/Test Data` — one per supported cipher/hash/filesystem combination — as well as synthetic, from-scratch header tests independent of the library's own crypto code. |
+| [`Asiri.Core.Tests`](Asiri.Core.Tests) | xUnit tests, run against real VeraCrypt container files checked into `Asiri.Core.Tests/Test Data` — covering every supported cipher/cascade, hash, filesystem, PIM, and keyfile combination — as well as synthetic, from-scratch header tests independent of the library's own crypto code. |
 | [`Asiri.ContainerBrowser`](Asiri.ContainerBrowser) | A small WPF reference application: open a container, browse its folder tree, and view text files, images, or a hex dump of anything else. Demonstrates `Asiri.Core` as a consumer would use it. |
 
 Each project has its own `AGENT.md` describing the scope and conventions the agent worked to.

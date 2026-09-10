@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -33,6 +34,63 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.Fat
                 _lifetime.ThrowIfClosed();
                 return FatPathHelper.GetLeafName(_path);
             }
+        }
+
+        /// <inheritdoc />
+        public string Path
+        {
+            get
+            {
+                _lifetime.ThrowIfClosed();
+                return _path;
+            }
+        }
+
+        /// <inheritdoc />
+        public IDirectory Parent
+        {
+            get
+            {
+                _lifetime.ThrowIfClosed();
+                var parentPath = FatPathHelper.GetParentPath(_path);
+                return parentPath == null ? null : new FatDirectory(_fat, parentPath, _lifetime);
+            }
+        }
+
+        /// <inheritdoc />
+        public Task<FileAttributes> GetAttributesAsync(CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                return _fat.GetAttributes(_path);
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task<DateTime> GetCreationTimeUtcAsync(CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                return _fat.GetCreationTimeUtc(_path);
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task<DateTime> GetLastWriteTimeUtcAsync(CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                return _fat.GetLastWriteTimeUtc(_path);
+            }, cancellationToken);
         }
 
         /// <inheritdoc />
@@ -78,6 +136,19 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.Fat
         {
             var bytes = await ReadAllBytesAsync(cancellationToken).ConfigureAwait(false);
             return Encoding.UTF8.GetString(bytes);
+        }
+
+        /// <inheritdoc />
+        public Task<Stream> OpenReadAsync(CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                return (Stream)_fat.OpenFile(_path, FileMode.Open, FileAccess.Read);
+            }, cancellationToken);
         }
     }
 }

@@ -11,16 +11,27 @@ This document takes precedence over all other instructions for the Asiri.Core pr
 - Do not implement write support.
 - Do not implement support for encrypted partitions or drives.
 - Do not implement hidden volumes.
-- Do not implement cascaded ciphers.
 - Implement AES, Serpent, Twofish, and Camellia.
+- Implement the following cascaded ciphers: AES-Twofish, AES-Twofish-Serpent, Serpent-AES,
+  Serpent-Twofish-AES, Twofish-Serpent, Camellia-Serpent.
+- Do not implement Kuznyechik, or any cascade involving it (Camellia-Kuznyechik,
+  Kuznyechik-AES, Kuznyechik-Serpent-Camellia, Kuznyechik-Twofish).
 - Implement SHA‑512, SHA‑256, Whirlpool, and BLAKE2s‑256.
+- Implement opening a container secured by one or more keyfiles, supplied by the caller as ordinary
+  files, mixed into the password per VeraCrypt's own algorithm. Do not implement security
+  tokens/smart cards (PKCS#11) or folder-of-keyfiles as a keyfile source.
 - Implement NTFS, FAT (FAT16/FAT32), and exFAT filesystems.
 
 ## Cryptography Requirements
 - Convert the provided .NET string password to UTF‑8 bytes.
-- Use PBKDF2‑SHA‑512 with VeraCrypt iteration counts.
+- Mix any supplied keyfiles into the password bytes, per VeraCrypt's own pool-mixing algorithm,
+  before PBKDF2 - keyfiles are never stored in the header and never searched for; the caller must
+  supply them, like the password.
+- Use PBKDF2 with VeraCrypt's iteration counts, computed from the caller's PIM (Personal Iterations
+  Multiplier) per VeraCrypt's own formula - 0 (the default) if none is supplied. PIM is never stored
+  in the header and never searched for; the caller must supply it, like the password.
 - Derive keys exactly as specified in VeraCrypt documentation.
-- Use AES‑XTS via BouncyCastle.
+- Use XTS mode, built on BouncyCastle's block ciphers, for every supported single cipher and cascade.
 - Implement sector‑based decryption.
 - Do not pre‑decrypt the entire container.
 - Decrypt sectors on demand only.
@@ -30,7 +41,9 @@ This document takes precedence over all other instructions for the Asiri.Core pr
   - Version fields
   - Sector size
 - If the primary header fails validation, attempt backup header fallback.
-- Do not modify cryptographic parameters, iteration counts, or block sizes.
+- Do not modify cryptographic parameters or block sizes. The PBKDF2 iteration count is the one
+  parameter that legitimately varies, per PIM - see Cryptography Requirements above - not a
+  deviation from this.
 
 ## Container Handling
 - Do not load the entire container into memory.
@@ -43,7 +56,11 @@ This document takes precedence over all other instructions for the Asiri.Core pr
 ## Filesystem Requirements
 - Use DiscUtils to interpret the decrypted block‑device stream, for each supported filesystem type (NTFS, FAT, exFAT).
 - Do not implement filesystem primitives yourself.
-- Implement `IDirectory` and `IFile`.
+- Implement `IDirectory` and `IFile`, including their `Path`, `Parent`, attribute, and timestamp
+  members (`IFileSystemEntry`), `IDirectory`'s `EnumerateFilesAsync`/`EnumerateDirectoriesAsync`,
+  and `IFile.OpenReadAsync`.
+- Each of the three filesystem backends (NTFS, FAT, exFAT) implements these independently, matching
+  the existing pattern (no shared base class between the NTFS/FAT/exFAT directory or file wrappers).
 - Expose the filesystem via `VeraCryptContainer.Root`.
 
 ## API Requirements

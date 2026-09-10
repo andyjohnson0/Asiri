@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -9,6 +10,7 @@ using DiscUtils.ExFat;
 using DiscUtils.Fat;
 using DiscUtils.Ntfs;
 using uk.andyjohnson.Asiri.Abstractions;
+using uk.andyjohnson.Asiri.Core.Crypto;
 using uk.andyjohnson.Asiri.Core.Filesystem.ExFat;
 using uk.andyjohnson.Asiri.Core.Filesystem.Fat;
 using uk.andyjohnson.Asiri.Core.Filesystem.Ntfs;
@@ -16,8 +18,9 @@ using uk.andyjohnson.Asiri.Core.Filesystem.Ntfs;
 namespace uk.andyjohnson.Asiri.Core
 {
     /// <summary>
-    /// The single-cipher algorithm used to encrypt a VeraCrypt container. The architecture allows
-    /// for cascaded ciphers, but only single ciphers are currently implemented.
+    /// The encryption algorithm used to encrypt a VeraCrypt container: either a single cipher, or
+    /// one of VeraCrypt's supported cascades of two or three ciphers applied in sequence. Kuznyechik
+    /// and any cascade involving it are out of scope and not represented here.
     /// </summary>
     public enum CryptoAlgorithm
     {
@@ -31,7 +34,25 @@ namespace uk.andyjohnson.Asiri.Core
         Twofish,
 
         /// <summary>Camellia.</summary>
-        Camellia
+        Camellia,
+
+        /// <summary>AES-Twofish cascade.</summary>
+        AesTwofish,
+
+        /// <summary>AES-Twofish-Serpent cascade.</summary>
+        AesTwofishSerpent,
+
+        /// <summary>Serpent-AES cascade.</summary>
+        SerpentAes,
+
+        /// <summary>Serpent-Twofish-AES cascade.</summary>
+        SerpentTwofishAes,
+
+        /// <summary>Twofish-Serpent cascade.</summary>
+        TwofishSerpent,
+
+        /// <summary>Camellia-Serpent cascade.</summary>
+        CamelliaSerpent
     }
 
     /// <summary>
@@ -85,13 +106,14 @@ namespace uk.andyjohnson.Asiri.Core
 
         private VeraCryptContainer(
             DecryptedBlockDeviceStream stream, DiscFileSystem fileSystem, ContainerLifetime lifetime, IDirectory root,
-            CryptoAlgorithm algorithm, FileSystemType fileSystemType)
+            CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, FileSystemType fileSystemType)
         {
             _stream = stream;
             _fileSystem = fileSystem;
             _lifetime = lifetime;
             Root = root;
             Algorithm = algorithm;
+            HashAlgorithm = hashAlgorithm;
             FileSystemType = fileSystemType;
         }
 
@@ -103,6 +125,16 @@ namespace uk.andyjohnson.Asiri.Core
         /// <param name="algo">The encryption algorithm used by the container.</param>
         /// <param name="hashAlgo">The hash algorithm used to derive keys from the password.</param>
         /// <param name="fsType">The filesystem type used within the container.</param>
+        /// <param name="pim">
+        /// The container's PIM (Personal Iterations Multiplier), or 0 - the default - if none was
+        /// set when the container was created. VeraCrypt does not store the PIM in the header, so it
+        /// must be supplied here, the same way the password is.
+        /// </param>
+        /// <param name="keyFiles">
+        /// Keyfiles to mix into the password, in order, or null - the default - for none. VeraCrypt
+        /// does not store keyfiles in the header, so, like the password and PIM, they must be
+        /// supplied here.
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>A container whose <see cref="Root"/> exposes the decrypted filesystem.</returns>
         public static async Task<VeraCryptContainer> OpenAsync(
@@ -111,6 +143,8 @@ namespace uk.andyjohnson.Asiri.Core
             CryptoAlgorithm algo,
             HashAlgorithm hashAlgo,
             FileSystemType fsType,
+            int pim = 0,
+            IEnumerable<FileInfo> keyFiles = null,
             CancellationToken cancellationToken = default)
         {
             if (path == null)
@@ -121,15 +155,9 @@ namespace uk.andyjohnson.Asiri.Core
             {
                 throw new ArgumentNullException(nameof(password));
             }
-            switch (algo)
+            if (!CascadeDefinitions.IsSupported(algo))
             {
-                case CryptoAlgorithm.Aes:
-                case CryptoAlgorithm.Serpent:
-                case CryptoAlgorithm.Twofish:
-                case CryptoAlgorithm.Camellia:
-                    break;
-                default:
-                    throw new ArgumentException($"Unsupported encryption algorithm: {algo}.", nameof(algo));
+                throw new ArgumentException($"Unsupported encryption algorithm: {algo}.", nameof(algo));
             }
 
             switch (hashAlgo)
@@ -152,8 +180,12 @@ namespace uk.andyjohnson.Asiri.Core
                 default:
                     throw new ArgumentException($"Unsupported filesystem type: {fsType}.", nameof(fsType));
             }
+            if (pim < 0)
+            {
+                throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
+            }
 
-            var header = await HeaderParser.ParseAsync(path, password, algo, hashAlgo, cancellationToken).ConfigureAwait(false);
+            var header = await HeaderParser.ParseAsync(path, password, algo, hashAlgo, pim, keyFiles, cancellationToken).ConfigureAwait(false);
             var decryptor = await SectorDecryptor.CreateAsync(path, header, cancellationToken).ConfigureAwait(false);
             var stream = new DecryptedBlockDeviceStream(decryptor);
 
@@ -161,7 +193,7 @@ namespace uk.andyjohnson.Asiri.Core
             {
                 var lifetime = new ContainerLifetime();
                 var (fileSystem, root) = await OpenFileSystemAsync(fsType, stream, lifetime, cancellationToken).ConfigureAwait(false);
-                return new VeraCryptContainer(stream, fileSystem, lifetime, root, algo, fsType);
+                return new VeraCryptContainer(stream, fileSystem, lifetime, root, algo, hashAlgo, fsType);
             }
             catch
             {
@@ -183,7 +215,8 @@ namespace uk.andyjohnson.Asiri.Core
         /// The (algorithm, hash) combination cannot be known in advance: the only way to tell whether
         /// a combination is correct is to derive keys with it and check whether the header's CRC
         /// validates, so that pairing must genuinely be searched. This searches over
-        /// <see cref="HeaderParser.TryDecryptRegionAsync"/> rather than looping <see cref="HeaderParser.ParseAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, CancellationToken)"/>
+        /// <see cref="HeaderParser.TryDecryptRegionAsync"/> rather than looping
+        /// <see cref="HeaderParser.ParseAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, int, IEnumerable{FileInfo}, CancellationToken)"/>
         /// directly, so the header regions are read from disk once and each combination is tried
         /// against the same bytes, rather than re-opening and re-reading the file per attempt.
         ///
@@ -194,11 +227,25 @@ namespace uk.andyjohnson.Asiri.Core
         /// </remarks>
         /// <param name="path">Path to the VeraCrypt container file.</param>
         /// <param name="password">The container password.</param>
+        /// <param name="pim">
+        /// The container's PIM (Personal Iterations Multiplier), or 0 - the default - if none was
+        /// set when the container was created. Unlike the encryption and hash algorithms, this is
+        /// never searched for - VeraCrypt does not store the PIM in the header, so, exactly like the
+        /// password, it must already be known and supplied by the caller. The same value is used for
+        /// every (algorithm, hash) combination the search tries.
+        /// </param>
+        /// <param name="keyFiles">
+        /// Keyfiles to mix into the password, in order, or null - the default - for none. Like PIM,
+        /// this is never searched for - the same keyfiles are used for every (algorithm, hash)
+        /// combination the search tries.
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>A container whose <see cref="Root"/> exposes the decrypted filesystem.</returns>
         public static async Task<VeraCryptContainer> OpenAsync(
             FileInfo path,
             string password,
+            int pim = 0,
+            IEnumerable<FileInfo> keyFiles = null,
             CancellationToken cancellationToken = default)
         {
             if (path == null)
@@ -209,8 +256,12 @@ namespace uk.andyjohnson.Asiri.Core
             {
                 throw new ArgumentNullException(nameof(password));
             }
+            if (pim < 0)
+            {
+                throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
+            }
 
-            var header = await DetectHeaderAsync(path, password, cancellationToken).ConfigureAwait(false);
+            var header = await DetectHeaderAsync(path, password, pim, keyFiles, cancellationToken).ConfigureAwait(false);
             if (header == null)
             {
                 throw new InvalidOperationException(
@@ -226,7 +277,7 @@ namespace uk.andyjohnson.Asiri.Core
                 var fsType = await DetectFileSystemTypeAsync(decryptor, cancellationToken).ConfigureAwait(false);
                 var lifetime = new ContainerLifetime();
                 var (fileSystem, root) = await OpenFileSystemAsync(fsType, stream, lifetime, cancellationToken).ConfigureAwait(false);
-                return new VeraCryptContainer(stream, fileSystem, lifetime, root, header.Algorithm, fsType);
+                return new VeraCryptContainer(stream, fileSystem, lifetime, root, header.Algorithm, header.HashAlgorithm, fsType);
             }
             catch
             {
@@ -241,7 +292,7 @@ namespace uk.andyjohnson.Asiri.Core
         /// match, reading each region from disk only once regardless of how many combinations are
         /// tried.
         /// </summary>
-        private static async Task<VeraCryptHeader> DetectHeaderAsync(FileInfo path, string password, CancellationToken cancellationToken)
+        private static async Task<VeraCryptHeader> DetectHeaderAsync(FileInfo path, string password, int pim, IEnumerable<FileInfo> keyFiles, CancellationToken cancellationToken)
         {
             Stream stream;
             try
@@ -256,7 +307,7 @@ namespace uk.andyjohnson.Asiri.Core
             using (stream)
             {
                 var primaryRegion = await HeaderParser.ReadRegionAsync(stream, 0, HeaderParser.HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                var header = await TryAllCombinationsAsync(primaryRegion, password, fromBackup: false, cancellationToken).ConfigureAwait(false);
+                var header = await TryAllCombinationsAsync(primaryRegion, password, fromBackup: false, pim, keyFiles, cancellationToken).ConfigureAwait(false);
                 if (header != null)
                 {
                     return header;
@@ -266,7 +317,7 @@ namespace uk.andyjohnson.Asiri.Core
                 {
                     var backupOffset = stream.Length - HeaderParser.BackupHeaderOffsetFromEnd;
                     var backupRegion = await HeaderParser.ReadRegionAsync(stream, backupOffset, HeaderParser.HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                    header = await TryAllCombinationsAsync(backupRegion, password, fromBackup: true, cancellationToken).ConfigureAwait(false);
+                    header = await TryAllCombinationsAsync(backupRegion, password, fromBackup: true, pim, keyFiles, cancellationToken).ConfigureAwait(false);
                     if (header != null)
                     {
                         return header;
@@ -277,14 +328,14 @@ namespace uk.andyjohnson.Asiri.Core
             return null;
         }
 
-        private static async Task<VeraCryptHeader> TryAllCombinationsAsync(byte[] region, string password, bool fromBackup, CancellationToken cancellationToken)
+        private static async Task<VeraCryptHeader> TryAllCombinationsAsync(byte[] region, string password, bool fromBackup, int pim, IEnumerable<FileInfo> keyFiles, CancellationToken cancellationToken)
         {
             foreach (CryptoAlgorithm algo in (CryptoAlgorithm[])Enum.GetValues(typeof(CryptoAlgorithm)))
             {
                 foreach (HashAlgorithm hashAlgo in (HashAlgorithm[])Enum.GetValues(typeof(HashAlgorithm)))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var header = await HeaderParser.TryDecryptRegionAsync(region, password, algo, hashAlgo, fromBackup, cancellationToken).ConfigureAwait(false);
+                    var header = await HeaderParser.TryDecryptRegionAsync(region, password, algo, hashAlgo, fromBackup, pim, keyFiles, cancellationToken).ConfigureAwait(false);
                     if (header != null)
                     {
                         return header;
@@ -431,15 +482,22 @@ namespace uk.andyjohnson.Asiri.Core
 
         /// <summary>
         /// The encryption algorithm the container was opened with - either as given to the
-        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, CancellationToken)"/>,
-        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, CancellationToken)"/>.
+        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, CancellationToken)"/>,
+        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CancellationToken)"/>.
         /// </summary>
         public CryptoAlgorithm Algorithm { get; private set; }
 
         /// <summary>
+        /// The hash algorithm the container was opened with - either as given to the
+        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, CancellationToken)"/>,
+        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CancellationToken)"/>.
+        /// </summary>
+        public HashAlgorithm HashAlgorithm { get; private set; }
+
+        /// <summary>
         /// The filesystem type detected within the container - either as given to the
-        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, CancellationToken)"/>,
-        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, CancellationToken)"/>.
+        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, CancellationToken)"/>,
+        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CancellationToken)"/>.
         /// </summary>
         public FileSystemType FileSystemType { get; private set; }
 

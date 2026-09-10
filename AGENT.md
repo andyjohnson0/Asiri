@@ -24,9 +24,14 @@ supported.
 - Do not implement write support.
 - Do not implement support for encrypted partitions or drives.
 - Do not implement hidden volumes.
-- Do not implement cascaded ciphers.
-- Supported encryption algorithms: AES, Serpent, Twofish, Camellia.
+- Supported encryption algorithms: AES, Serpent, Twofish, Camellia, and the cascades AES-Twofish,
+  AES-Twofish-Serpent, Serpent-AES, Serpent-Twofish-AES, Twofish-Serpent, Camellia-Serpent.
 - Supported hash algorithms: SHA-512, SHA-256, Whirlpool, BLAKE2s-256.
+- Support opening a container with a non-default PIM (Personal Iterations Multiplier), supplied by
+  the caller - VeraCrypt does not store it in the container.
+- Support opening a container secured by one or more keyfiles, supplied by the caller as ordinary
+  files - VeraCrypt does not store keyfiles in the container either. Do not implement security
+  tokens/smart cards (PKCS#11) or folder-of-keyfiles as a keyfile source.
 - Supported filesystems: NTFS, FAT (FAT16/FAT32), exFAT.
 - Do not implement Kuznyechik or Streebog (GOST algorithms).
 

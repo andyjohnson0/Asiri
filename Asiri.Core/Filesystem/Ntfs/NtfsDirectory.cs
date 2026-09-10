@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using DiscUtils.Ntfs;
@@ -36,6 +37,63 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.Ntfs
         }
 
         /// <inheritdoc />
+        public string Path
+        {
+            get
+            {
+                _lifetime.ThrowIfClosed();
+                return _path;
+            }
+        }
+
+        /// <inheritdoc />
+        public IDirectory Parent
+        {
+            get
+            {
+                _lifetime.ThrowIfClosed();
+                var parentPath = NtfsPathHelper.GetParentPath(_path);
+                return parentPath == null ? null : new NtfsDirectory(_ntfs, parentPath, _lifetime);
+            }
+        }
+
+        /// <inheritdoc />
+        public Task<FileAttributes> GetAttributesAsync(CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                return _ntfs.GetAttributes(_path);
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task<DateTime> GetCreationTimeUtcAsync(CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                return _ntfs.GetCreationTimeUtc(_path);
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task<DateTime> GetLastWriteTimeUtcAsync(CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                return _ntfs.GetLastWriteTimeUtc(_path);
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
         public Task<IEnumerable<IFileSystemEntry>> GetEntriesAsync(CancellationToken cancellationToken = default)
         {
             _lifetime.ThrowIfClosed();
@@ -55,6 +113,54 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.Ntfs
                     result.Add(CreateEntry(entryPath));
                 }
                 return (IEnumerable<IFileSystemEntry>)result;
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task<IEnumerable<IFile>> EnumerateFilesAsync(string searchPattern = "*", CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            if (searchPattern == null)
+            {
+                throw new ArgumentNullException(nameof(searchPattern));
+            }
+
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+
+                var result = new List<IFile>();
+                foreach (var filePath in _ntfs.GetFiles(_path, searchPattern))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    result.Add(new NtfsFile(_ntfs, filePath, _lifetime));
+                }
+                return (IEnumerable<IFile>)result;
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task<IEnumerable<IDirectory>> EnumerateDirectoriesAsync(string searchPattern = "*", CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            if (searchPattern == null)
+            {
+                throw new ArgumentNullException(nameof(searchPattern));
+            }
+
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+
+                var result = new List<IDirectory>();
+                foreach (var dirPath in _ntfs.GetDirectories(_path, searchPattern))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    result.Add(new NtfsDirectory(_ntfs, dirPath, _lifetime));
+                }
+                return (IEnumerable<IDirectory>)result;
             }, cancellationToken);
         }
 

@@ -25,16 +25,32 @@ namespace uk.andyjohnson.Asiri.Core
         }
 
         /// <summary>
+        /// The starting value of the running CRC-32 register, before any bytes are processed.
+        /// </summary>
+        public const uint InitialValue = 0xFFFFFFFF;
+
+        /// <summary>
         /// Computes the CRC-32 checksum of a region of a byte array.
         /// </summary>
         public static uint Compute(byte[] data, int offset, int length)
         {
-            var crc = 0xFFFFFFFF;
+            var crc = InitialValue;
             for (var i = offset; i < offset + length; i++)
             {
-                crc = _table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+                crc = UpdateByte(crc, data[i]);
             }
-            return crc ^ 0xFFFFFFFF;
+            return crc ^ InitialValue;
+        }
+
+        /// <summary>
+        /// Advances a running CRC-32 register by one byte, without finalizing it (no final XOR).
+        /// Exposed for VeraCrypt's keyfile pool-mixing algorithm (see <see cref="Crypto.KeyfileMixer"/>),
+        /// which uses the raw intermediate register value after each byte as a mixing source, not as
+        /// a finished checksum - unlike <see cref="Compute"/>, which finalizes the standard way.
+        /// </summary>
+        public static uint UpdateByte(uint crc, byte value)
+        {
+            return _table[(crc ^ value) & 0xFF] ^ (crc >> 8);
         }
     }
 }
