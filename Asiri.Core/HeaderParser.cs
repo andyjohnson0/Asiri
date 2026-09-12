@@ -259,35 +259,95 @@ namespace uk.andyjohnson.Asiri.Core
         {
             return Task.Run(() =>
             {
-                var salt = new byte[SaltSize];
-                Buffer.BlockCopy(region, 0, salt, 0, SaltSize);
-
+                var salt = ExtractSalt(region);
                 var componentCount = CascadeDefinitions.GetComponentCount(algorithm);
-                var keyMaterialSize = CascadeDefinitions.ComponentKeySize * componentCount;
 
                 // PBKDF2 - by far the most expensive step in this whole pipeline, more so still for a
                 // large PIM - so cancellation is checked immediately before it, not just once at the
                 // top of the task.
                 cancellationToken.ThrowIfCancellationRequested();
-                var headerKey = DeriveHeaderKey(passwordBytes, salt, hashAlgorithm, componentCount, pim);
+                var keyStream = DeriveHeaderKey(passwordBytes, salt, hashAlgorithm, componentCount, pim);
 
-                // The derived key is laid out as all components' cipher keys concatenated, followed
-                // by all components' tweak keys concatenated - see CascadeDefinitions and
-                // XtsCipherSelector, which slice each component's 32-byte share out of these two
-                // halves in the cascade's key-segment order.
-                var headerCipherKey = new byte[keyMaterialSize];
-                var headerTweakKey = new byte[keyMaterialSize];
-                Buffer.BlockCopy(headerKey, 0, headerCipherKey, 0, keyMaterialSize);
-                Buffer.BlockCopy(headerKey, keyMaterialSize, headerTweakKey, 0, keyMaterialSize);
-
-                var encryptedHeader = new byte[EncryptedHeaderSize];
-                Buffer.BlockCopy(region, SaltSize, encryptedHeader, 0, EncryptedHeaderSize);
-
-                cancellationToken.ThrowIfCancellationRequested();
-                var decrypted = XtsCipherSelector.Decrypt(algorithm, encryptedHeader, headerCipherKey, headerTweakKey, dataUnitNumber: 0);
-
-                return ValidateAndBuildHeader(decrypted, algorithm, hashAlgorithm, fromBackup);
+                return DecryptAndValidate(region, keyStream, componentCount, algorithm, hashAlgorithm, fromBackup);
             }, cancellationToken);
+        }
+
+        /// <summary>
+        /// Derives a single PBKDF2 key stream, for one hash algorithm, long enough to cover the key
+        /// material of the largest cascade this library supports (<paramref name="maxComponentCount"/>
+        /// components), rather than a separate derivation per <see cref="CryptoAlgorithm"/>. PBKDF2
+        /// builds its output block-by-block (RFC 8018 s.5.2: block <c>i</c> depends only on <c>i</c>,
+        /// the password, and the salt - never on how many blocks were ultimately requested), so a
+        /// shorter, algorithm-specific key is always exactly a byte-for-byte prefix of this longer
+        /// stream. <see cref="SliceKeyMaterial"/> below relies on that guarantee. Used by
+        /// <see cref="VeraCryptContainer"/>'s brute-force search
+        /// (<see cref="VeraCryptContainer.OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CancellationToken)"/>)
+        /// to replace what was one full PBKDF2 derivation per (algorithm, hash) pair - up to 40 for
+        /// this library's 10 algorithms x 4 hashes - with one derivation per hash algorithm (4 total),
+        /// each done once at the maximum length any algorithm might need.
+        /// </summary>
+        internal static Task<byte[]> DeriveMaxKeyStreamAsync(byte[] region, byte[] passwordBytes, HashAlgorithm hashAlgorithm, int maxComponentCount, int pim, CancellationToken cancellationToken)
+        {
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var salt = ExtractSalt(region);
+                return DeriveHeaderKey(passwordBytes, salt, hashAlgorithm, maxComponentCount, pim);
+            }, cancellationToken);
+        }
+
+        /// <summary>
+        /// Validates a single (<see cref="CryptoAlgorithm"/>, <see cref="HashAlgorithm"/>) combination
+        /// against a key stream already derived by <see cref="DeriveMaxKeyStreamAsync"/>, slicing out
+        /// only the bytes this algorithm's component count needs instead of deriving a fresh key.
+        /// </summary>
+        internal static Task<VeraCryptHeader> TryValidateWithKeyStreamAsync(byte[] region, byte[] keyStream, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, bool fromBackup, CancellationToken cancellationToken)
+        {
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var componentCount = CascadeDefinitions.GetComponentCount(algorithm);
+                return DecryptAndValidate(region, keyStream, componentCount, algorithm, hashAlgorithm, fromBackup);
+            }, cancellationToken);
+        }
+
+        private static byte[] ExtractSalt(byte[] region)
+        {
+            var salt = new byte[SaltSize];
+            Buffer.BlockCopy(region, 0, salt, 0, SaltSize);
+            return salt;
+        }
+
+        private static VeraCryptHeader DecryptAndValidate(byte[] region, byte[] keyStream, int componentCount, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, bool fromBackup)
+        {
+            var (headerCipherKey, headerTweakKey) = SliceKeyMaterial(keyStream, componentCount);
+
+            var encryptedHeader = new byte[EncryptedHeaderSize];
+            Buffer.BlockCopy(region, SaltSize, encryptedHeader, 0, EncryptedHeaderSize);
+
+            var decrypted = XtsCipherSelector.Decrypt(algorithm, encryptedHeader, headerCipherKey, headerTweakKey, dataUnitNumber: 0);
+
+            return ValidateAndBuildHeader(decrypted, algorithm, hashAlgorithm, fromBackup);
+        }
+
+        /// <summary>
+        /// Slices a component-count-specific (cipher key, tweak key) pair out of a PBKDF2 key stream.
+        /// The stream is laid out as all components' cipher keys concatenated, followed by all
+        /// components' tweak keys concatenated - see CascadeDefinitions and XtsCipherSelector, which
+        /// slice each component's own 32-byte share out of these two halves in the cascade's
+        /// key-segment order. <paramref name="keyStream"/> may be longer than
+        /// <paramref name="componentCount"/> strictly needs (see <see cref="DeriveMaxKeyStreamAsync"/>);
+        /// only the required prefix is used.
+        /// </summary>
+        private static (byte[] cipherKey, byte[] tweakKey) SliceKeyMaterial(byte[] keyStream, int componentCount)
+        {
+            var keyMaterialSize = CascadeDefinitions.ComponentKeySize * componentCount;
+
+            var cipherKey = new byte[keyMaterialSize];
+            var tweakKey = new byte[keyMaterialSize];
+            Buffer.BlockCopy(keyStream, 0, cipherKey, 0, keyMaterialSize);
+            Buffer.BlockCopy(keyStream, keyMaterialSize, tweakKey, 0, keyMaterialSize);
+            return (cipherKey, tweakKey);
         }
 
         private static byte[] DeriveHeaderKey(byte[] passwordBytes, byte[] salt, HashAlgorithm hashAlgorithm, int componentCount, int pim)

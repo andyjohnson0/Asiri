@@ -304,10 +304,16 @@ namespace uk.andyjohnson.Asiri.Core
                 throw new InvalidOperationException($"Unable to open container file: {path.FullName}", ex);
             }
 
+            // Mixing keyfiles into the password only depends on the password and keyfiles, not on
+            // which (algorithm, hash) combination or header region is being tried, so it is done once
+            // here rather than once per combination (up to 80 times: 40 combinations x primary and
+            // backup regions) as it would be if this delegated to HeaderParser.TryDecryptRegionAsync.
+            var passwordBytes = KeyfileMixer.Apply(Encoding.UTF8.GetBytes(password), keyFiles);
+
             using (stream)
             {
                 var primaryRegion = await HeaderParser.ReadRegionAsync(stream, 0, HeaderParser.HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                var header = await TryAllCombinationsAsync(primaryRegion, password, fromBackup: false, pim, keyFiles, cancellationToken).ConfigureAwait(false);
+                var header = await TryAllCombinationsAsync(primaryRegion, passwordBytes, fromBackup: false, pim, cancellationToken).ConfigureAwait(false);
                 if (header != null)
                 {
                     return header;
@@ -317,7 +323,7 @@ namespace uk.andyjohnson.Asiri.Core
                 {
                     var backupOffset = stream.Length - HeaderParser.BackupHeaderOffsetFromEnd;
                     var backupRegion = await HeaderParser.ReadRegionAsync(stream, backupOffset, HeaderParser.HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                    header = await TryAllCombinationsAsync(backupRegion, password, fromBackup: true, pim, keyFiles, cancellationToken).ConfigureAwait(false);
+                    header = await TryAllCombinationsAsync(backupRegion, passwordBytes, fromBackup: true, pim, cancellationToken).ConfigureAwait(false);
                     if (header != null)
                     {
                         return header;
@@ -328,14 +334,30 @@ namespace uk.andyjohnson.Asiri.Core
             return null;
         }
 
-        private static async Task<VeraCryptHeader> TryAllCombinationsAsync(byte[] region, string password, bool fromBackup, int pim, IEnumerable<FileInfo> keyFiles, CancellationToken cancellationToken)
+        /// <summary>
+        /// The largest component count among every supported <see cref="CryptoAlgorithm"/> (3, for
+        /// this library's two three-cipher cascades) - the key stream length
+        /// <see cref="TryAllCombinationsAsync"/> derives per hash algorithm, since it must cover
+        /// whichever algorithm turns out to need the most key material.
+        /// </summary>
+        private static readonly int MaxComponentCount =
+            ((CryptoAlgorithm[])Enum.GetValues(typeof(CryptoAlgorithm))).Max(CascadeDefinitions.GetComponentCount);
+
+        private static async Task<VeraCryptHeader> TryAllCombinationsAsync(byte[] region, byte[] passwordBytes, bool fromBackup, int pim, CancellationToken cancellationToken)
         {
-            foreach (CryptoAlgorithm algo in (CryptoAlgorithm[])Enum.GetValues(typeof(CryptoAlgorithm)))
+            foreach (HashAlgorithm hashAlgo in (HashAlgorithm[])Enum.GetValues(typeof(HashAlgorithm)))
             {
-                foreach (HashAlgorithm hashAlgo in (HashAlgorithm[])Enum.GetValues(typeof(HashAlgorithm)))
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // One PBKDF2 derivation per hash algorithm, long enough to cover every
+                // CryptoAlgorithm's key material, rather than one derivation per (algorithm, hash)
+                // pair - see HeaderParser.DeriveMaxKeyStreamAsync for why this is safe.
+                var keyStream = await HeaderParser.DeriveMaxKeyStreamAsync(region, passwordBytes, hashAlgo, MaxComponentCount, pim, cancellationToken).ConfigureAwait(false);
+
+                foreach (CryptoAlgorithm algo in (CryptoAlgorithm[])Enum.GetValues(typeof(CryptoAlgorithm)))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var header = await HeaderParser.TryDecryptRegionAsync(region, password, algo, hashAlgo, fromBackup, pim, keyFiles, cancellationToken).ConfigureAwait(false);
+                    var header = await HeaderParser.TryValidateWithKeyStreamAsync(region, keyStream, algo, hashAlgo, fromBackup, cancellationToken).ConfigureAwait(false);
                     if (header != null)
                     {
                         return header;
