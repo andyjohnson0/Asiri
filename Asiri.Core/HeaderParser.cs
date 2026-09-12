@@ -273,41 +273,52 @@ namespace uk.andyjohnson.Asiri.Core
         }
 
         /// <summary>
-        /// Derives a single PBKDF2 key stream, for one hash algorithm, long enough to cover the key
-        /// material of the largest cascade this library supports (<paramref name="maxComponentCount"/>
-        /// components), rather than a separate derivation per <see cref="CryptoAlgorithm"/>. PBKDF2
-        /// builds its output block-by-block (RFC 8018 s.5.2: block <c>i</c> depends only on <c>i</c>,
-        /// the password, and the salt - never on how many blocks were ultimately requested), so a
-        /// shorter, algorithm-specific key is always exactly a byte-for-byte prefix of this longer
-        /// stream. <see cref="SliceKeyMaterial"/> below relies on that guarantee. Used by
-        /// <see cref="VeraCryptContainer"/>'s brute-force search
-        /// (<see cref="VeraCryptContainer.OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CancellationToken)"/>)
-        /// to replace what was one full PBKDF2 derivation per (algorithm, hash) pair - up to 40 for
-        /// this library's 10 algorithms x 4 hashes - with one derivation per hash algorithm (4 total),
-        /// each done once at the maximum length any algorithm might need.
+        /// Searches every <see cref="CryptoAlgorithm"/> in <paramref name="algorithmsByAscendingComponentCount"/>,
+        /// for one fixed hash algorithm, against a single already-read header region - the inner
+        /// loop of <see cref="VeraCryptContainer"/>'s brute-force search
+        /// (<see cref="VeraCryptContainer.OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CancellationToken)"/>).
+        ///
+        /// Rather than deriving a fresh PBKDF2 key per algorithm (up to 10 full derivations for this
+        /// hash alone) or deriving the maximum length any algorithm might need upfront (which wastes
+        /// work whenever an early, smaller-cascade algorithm turns out to be the right one - measured
+        /// regression, not a hypothetical one), this uses an <see cref="IncrementalPbkdf2Stream"/>
+        /// that grows only as far as the search actually needs. Trying algorithms in ascending
+        /// component-count order (the caller's responsibility - see
+        /// <see cref="VeraCryptContainer"/>'s <c>AlgorithmsByAscendingComponentCount</c>) means the
+        /// stream almost never grows further than the winning algorithm's own component count
+        /// requires, while the worst case - needing every component count before finding a match, or
+        /// finding no match at all - costs no more than deriving the maximum upfront would have,
+        /// since no block is ever computed twice.
         /// </summary>
-        internal static Task<byte[]> DeriveMaxKeyStreamAsync(byte[] region, byte[] passwordBytes, HashAlgorithm hashAlgorithm, int maxComponentCount, int pim, CancellationToken cancellationToken)
+        internal static Task<VeraCryptHeader> TrySearchHashAlgorithmAsync(
+            byte[] region, byte[] passwordBytes, HashAlgorithm hashAlgorithm,
+            IReadOnlyList<CryptoAlgorithm> algorithmsByAscendingComponentCount, bool fromBackup, int pim,
+            CancellationToken cancellationToken)
         {
             return Task.Run(() =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var salt = ExtractSalt(region);
-                return DeriveHeaderKey(passwordBytes, salt, hashAlgorithm, maxComponentCount, pim);
-            }, cancellationToken);
-        }
 
-        /// <summary>
-        /// Validates a single (<see cref="CryptoAlgorithm"/>, <see cref="HashAlgorithm"/>) combination
-        /// against a key stream already derived by <see cref="DeriveMaxKeyStreamAsync"/>, slicing out
-        /// only the bytes this algorithm's component count needs instead of deriving a fresh key.
-        /// </summary>
-        internal static Task<VeraCryptHeader> TryValidateWithKeyStreamAsync(byte[] region, byte[] keyStream, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, bool fromBackup, CancellationToken cancellationToken)
-        {
-            return Task.Run(() =>
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var componentCount = CascadeDefinitions.GetComponentCount(algorithm);
-                return DecryptAndValidate(region, keyStream, componentCount, algorithm, hashAlgorithm, fromBackup);
+                using (var prf = Pbkdf2PrfFactory.Create(hashAlgorithm, passwordBytes))
+                using (var keyStream = new IncrementalPbkdf2Stream(prf, salt, GetPbkdf2IterationCount(pim)))
+                {
+                    foreach (var algorithm in algorithmsByAscendingComponentCount)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        var componentCount = CascadeDefinitions.GetComponentCount(algorithm);
+                        var keyMaterial = keyStream.GetAtLeast(2 * CascadeDefinitions.ComponentKeySize * componentCount);
+
+                        var header = DecryptAndValidate(region, keyMaterial, componentCount, algorithm, hashAlgorithm, fromBackup);
+                        if (header != null)
+                        {
+                            return header;
+                        }
+                    }
+
+                    return null;
+                }
             }, cancellationToken);
         }
 
@@ -335,9 +346,10 @@ namespace uk.andyjohnson.Asiri.Core
         /// The stream is laid out as all components' cipher keys concatenated, followed by all
         /// components' tweak keys concatenated - see CascadeDefinitions and XtsCipherSelector, which
         /// slice each component's own 32-byte share out of these two halves in the cascade's
-        /// key-segment order. <paramref name="keyStream"/> may be longer than
-        /// <paramref name="componentCount"/> strictly needs (see <see cref="DeriveMaxKeyStreamAsync"/>);
-        /// only the required prefix is used.
+        /// key-segment order. <paramref name="keyStream"/> is expected to be exactly
+        /// <c>2 * ComponentKeySize * componentCount</c> bytes - both callers
+        /// (<see cref="TryDecryptAndValidateAsync"/> and <see cref="TrySearchHashAlgorithmAsync"/>)
+        /// already derive or request exactly that much.
         /// </summary>
         private static (byte[] cipherKey, byte[] tweakKey) SliceKeyMaterial(byte[] keyStream, int componentCount)
         {

@@ -335,33 +335,28 @@ namespace uk.andyjohnson.Asiri.Core
         }
 
         /// <summary>
-        /// The largest component count among every supported <see cref="CryptoAlgorithm"/> (3, for
-        /// this library's two three-cipher cascades) - the key stream length
-        /// <see cref="TryAllCombinationsAsync"/> derives per hash algorithm, since it must cover
-        /// whichever algorithm turns out to need the most key material.
+        /// Every supported <see cref="CryptoAlgorithm"/>, ordered so single-cipher algorithms (the
+        /// least key material to derive) are tried before cascades. <see cref="TryAllCombinationsAsync"/>
+        /// tries them in this order for each hash algorithm so that
+        /// <see cref="HeaderParser.TrySearchHashAlgorithmAsync"/>'s incremental key derivation grows
+        /// only as far as actually needed: a single-cipher container is found without ever deriving
+        /// cascade-sized key material.
         /// </summary>
-        private static readonly int MaxComponentCount =
-            ((CryptoAlgorithm[])Enum.GetValues(typeof(CryptoAlgorithm))).Max(CascadeDefinitions.GetComponentCount);
+        private static readonly CryptoAlgorithm[] AlgorithmsByAscendingComponentCount =
+            ((CryptoAlgorithm[])Enum.GetValues(typeof(CryptoAlgorithm)))
+                .OrderBy(CascadeDefinitions.GetComponentCount)
+                .ToArray();
 
         private static async Task<VeraCryptHeader> TryAllCombinationsAsync(byte[] region, byte[] passwordBytes, bool fromBackup, int pim, CancellationToken cancellationToken)
         {
             foreach (HashAlgorithm hashAlgo in (HashAlgorithm[])Enum.GetValues(typeof(HashAlgorithm)))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-
-                // One PBKDF2 derivation per hash algorithm, long enough to cover every
-                // CryptoAlgorithm's key material, rather than one derivation per (algorithm, hash)
-                // pair - see HeaderParser.DeriveMaxKeyStreamAsync for why this is safe.
-                var keyStream = await HeaderParser.DeriveMaxKeyStreamAsync(region, passwordBytes, hashAlgo, MaxComponentCount, pim, cancellationToken).ConfigureAwait(false);
-
-                foreach (CryptoAlgorithm algo in (CryptoAlgorithm[])Enum.GetValues(typeof(CryptoAlgorithm)))
+                var header = await HeaderParser.TrySearchHashAlgorithmAsync(
+                    region, passwordBytes, hashAlgo, AlgorithmsByAscendingComponentCount, fromBackup, pim, cancellationToken).ConfigureAwait(false);
+                if (header != null)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var header = await HeaderParser.TryValidateWithKeyStreamAsync(region, keyStream, algo, hashAlgo, fromBackup, cancellationToken).ConfigureAwait(false);
-                    if (header != null)
-                    {
-                        return header;
-                    }
+                    return header;
                 }
             }
             return null;
