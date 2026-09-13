@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
@@ -45,10 +46,17 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             }
 
             OpenMenuItem.IsEnabled = false;
+
+            using var cancellationTokenSource = new CancellationTokenSource();
+            var progressDialog = new OpeningProgressDialog(cancellationTokenSource) { Owner = this };
+            progressDialog.Show();
+            IsEnabled = false;
+
             try
             {
                 _container = await VeraCryptContainer.OpenAsync(
-                    new FileInfo(openDialog.FileName), credentialsDialog.Password, credentialsDialog.Pim, credentialsDialog.KeyFiles);
+                    new FileInfo(openDialog.FileName), credentialsDialog.Password, credentialsDialog.Pim, credentialsDialog.KeyFiles,
+                    credentialsDialog.Algorithm, credentialsDialog.HashAlgorithm, cancellationTokenSource.Token);
 
                 ClearContentPane();
                 await LoadRootAsync();
@@ -56,10 +64,20 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
                 CloseMenuItem.IsEnabled = true;
                 StatusText.Text = $"Opened: {openDialog.FileName} ({_container.Algorithm} / {_container.HashAlgorithm} / {_container.FileSystemType})";
             }
+            catch (OperationCanceledException)
+            {
+                OpenMenuItem.IsEnabled = true;
+                StatusText.Text = "Open cancelled.";
+            }
             catch (Exception ex)
             {
                 OpenMenuItem.IsEnabled = true;
                 MessageBox.Show(this, ex.Message, "Unable to open container", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                IsEnabled = true;
+                progressDialog.Close();
             }
         }
 
