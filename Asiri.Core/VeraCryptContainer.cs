@@ -209,21 +209,25 @@ namespace uk.andyjohnson.Asiri.Core
         /// <summary>
         /// Opens a VeraCrypt container without knowing its encryption algorithm, hash algorithm, or
         /// filesystem type in advance - only the password is required, matching how VeraCrypt itself
-        /// mounts a volume.
+        /// mounts a volume. Either or both of <paramref name="algo"/> and <paramref name="hashAlgo"/>
+        /// can be supplied if already known, narrowing or eliminating the search accordingly.
         /// </summary>
         /// <remarks>
-        /// The (algorithm, hash) combination cannot be known in advance: the only way to tell whether
-        /// a combination is correct is to derive keys with it and check whether the header's CRC
-        /// validates, so that pairing must genuinely be searched. This searches over
-        /// <see cref="HeaderParser.TryDecryptRegionAsync"/> rather than looping
+        /// An unspecified (algorithm, hash) combination cannot be known in advance: the only way to
+        /// tell whether a combination is correct is to derive keys with it and check whether the
+        /// header's CRC validates, so that pairing must genuinely be searched to whatever extent
+        /// isn't already pinned down by <paramref name="algo"/>/<paramref name="hashAlgo"/>. This
+        /// searches over <see cref="HeaderParser.TrySearchHashAlgorithmAsync"/> rather than looping
         /// <see cref="HeaderParser.ParseAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, int, IEnumerable{FileInfo}, CancellationToken)"/>
         /// directly, so the header regions are read from disk once and each combination is tried
         /// against the same bytes, rather than re-opening and re-reading the file per attempt.
         ///
-        /// The filesystem type, by contrast, is not searched for: once the header decrypts
-        /// correctly, the volume's boot sector can be read directly and its OEM ID signature
+        /// The filesystem type, by contrast, is never searched for, known or not: once the header
+        /// decrypts correctly, the volume's boot sector can be read directly and its OEM ID signature
         /// inspected to determine NTFS, exFAT, or (by elimination) FAT - see
-        /// <see cref="DetectFileSystemTypeAsync"/>.
+        /// <see cref="DetectFileSystemTypeAsync"/>. There is no equivalent "I already know the
+        /// filesystem type" parameter here for that reason: there is no search cost on that axis to
+        /// eliminate.
         /// </remarks>
         /// <param name="path">Path to the VeraCrypt container file.</param>
         /// <param name="password">The container password.</param>
@@ -239,6 +243,16 @@ namespace uk.andyjohnson.Asiri.Core
         /// this is never searched for - the same keyfiles are used for every (algorithm, hash)
         /// combination the search tries.
         /// </param>
+        /// <param name="algo">
+        /// The container's encryption algorithm, if already known, or null - the default - to search
+        /// every supported <see cref="CryptoAlgorithm"/>. Supplying this when known turns what would
+        /// be up to 4 PBKDF2 derivations (one per hash algorithm still being searched) into exactly 1.
+        /// </param>
+        /// <param name="hashAlgo">
+        /// The container's hash algorithm, if already known, or null - the default - to search every
+        /// supported <see cref="HashAlgorithm"/>. Supplying this when known skips the (up to 3) other
+        /// hash algorithms' derivations entirely, rather than only trying them after this one fails.
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>A container whose <see cref="Root"/> exposes the decrypted filesystem.</returns>
         public static async Task<VeraCryptContainer> OpenAsync(
@@ -246,6 +260,8 @@ namespace uk.andyjohnson.Asiri.Core
             string password,
             int pim = 0,
             IEnumerable<FileInfo> keyFiles = null,
+            CryptoAlgorithm? algo = null,
+            HashAlgorithm? hashAlgo = null,
             CancellationToken cancellationToken = default)
         {
             if (path == null)
@@ -260,8 +276,16 @@ namespace uk.andyjohnson.Asiri.Core
             {
                 throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
             }
+            if (algo.HasValue && !CascadeDefinitions.IsSupported(algo.Value))
+            {
+                throw new ArgumentException($"Unsupported encryption algorithm: {algo.Value}.", nameof(algo));
+            }
+            if (hashAlgo.HasValue && !SupportedHashAlgorithms.Contains(hashAlgo.Value))
+            {
+                throw new ArgumentException($"Unsupported hash algorithm: {hashAlgo.Value}.", nameof(hashAlgo));
+            }
 
-            var header = await DetectHeaderAsync(path, password, pim, keyFiles, cancellationToken).ConfigureAwait(false);
+            var header = await DetectHeaderAsync(path, password, pim, keyFiles, algo, hashAlgo, cancellationToken).ConfigureAwait(false);
             if (header == null)
             {
                 throw new InvalidOperationException(
@@ -292,7 +316,9 @@ namespace uk.andyjohnson.Asiri.Core
         /// match, reading each region from disk only once regardless of how many combinations are
         /// tried.
         /// </summary>
-        private static async Task<VeraCryptHeader> DetectHeaderAsync(FileInfo path, string password, int pim, IEnumerable<FileInfo> keyFiles, CancellationToken cancellationToken)
+        private static async Task<VeraCryptHeader> DetectHeaderAsync(
+            FileInfo path, string password, int pim, IEnumerable<FileInfo> keyFiles,
+            CryptoAlgorithm? algo, HashAlgorithm? hashAlgo, CancellationToken cancellationToken)
         {
             Stream stream;
             try
@@ -313,7 +339,7 @@ namespace uk.andyjohnson.Asiri.Core
             using (stream)
             {
                 var primaryRegion = await HeaderParser.ReadRegionAsync(stream, 0, HeaderParser.HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                var header = await TryAllCombinationsAsync(primaryRegion, passwordBytes, fromBackup: false, pim, cancellationToken).ConfigureAwait(false);
+                var header = await TryAllCombinationsAsync(primaryRegion, passwordBytes, fromBackup: false, pim, algo, hashAlgo, cancellationToken).ConfigureAwait(false);
                 if (header != null)
                 {
                     return header;
@@ -323,7 +349,7 @@ namespace uk.andyjohnson.Asiri.Core
                 {
                     var backupOffset = stream.Length - HeaderParser.BackupHeaderOffsetFromEnd;
                     var backupRegion = await HeaderParser.ReadRegionAsync(stream, backupOffset, HeaderParser.HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                    header = await TryAllCombinationsAsync(backupRegion, passwordBytes, fromBackup: true, pim, cancellationToken).ConfigureAwait(false);
+                    header = await TryAllCombinationsAsync(backupRegion, passwordBytes, fromBackup: true, pim, algo, hashAlgo, cancellationToken).ConfigureAwait(false);
                     if (header != null)
                     {
                         return header;
@@ -347,13 +373,38 @@ namespace uk.andyjohnson.Asiri.Core
                 .OrderBy(CascadeDefinitions.GetComponentCount)
                 .ToArray();
 
-        private static async Task<VeraCryptHeader> TryAllCombinationsAsync(byte[] region, byte[] passwordBytes, bool fromBackup, int pim, CancellationToken cancellationToken)
+        /// <summary>
+        /// Every <see cref="HashAlgorithm"/> this library supports, in the order
+        /// <see cref="TryAllCombinationsAsync"/> tries them when the caller hasn't already narrowed
+        /// it down via <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, CancellationToken)"/>'s
+        /// <c>hashAlgo</c> parameter. Also doubles as the validation set for that parameter - see
+        /// <c>SupportedHashAlgorithms.Contains</c> in <c>OpenAsync</c> above.
+        /// </summary>
+        private static readonly HashAlgorithm[] SupportedHashAlgorithms = (HashAlgorithm[])Enum.GetValues(typeof(HashAlgorithm));
+
+        /// <summary>
+        /// Searches every (<see cref="CryptoAlgorithm"/>, <see cref="HashAlgorithm"/>) combination not
+        /// already ruled out by <paramref name="algo"/>/<paramref name="hashAlgo"/> - each narrows the
+        /// corresponding axis to a single value instead of searching it, rather than changing how the
+        /// search itself works. When both are supplied this still goes through the same brute-force
+        /// scaffolding (reading header regions, mixing keyfiles) as a single, one-combination search,
+        /// rather than <see cref="HeaderParser.ParseAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, int, IEnumerable{FileInfo}, CancellationToken)"/>'s
+        /// more direct path - a caller with full knowledge of both should prefer the fully-explicit
+        /// <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, CancellationToken)"/>
+        /// overload instead, which also skips filesystem-type detection.
+        /// </summary>
+        private static async Task<VeraCryptHeader> TryAllCombinationsAsync(
+            byte[] region, byte[] passwordBytes, bool fromBackup, int pim,
+            CryptoAlgorithm? algo, HashAlgorithm? hashAlgo, CancellationToken cancellationToken)
         {
-            foreach (HashAlgorithm hashAlgo in (HashAlgorithm[])Enum.GetValues(typeof(HashAlgorithm)))
+            var algorithmsToTry = algo.HasValue ? new[] { algo.Value } : AlgorithmsByAscendingComponentCount;
+            var hashAlgorithmsToTry = hashAlgo.HasValue ? new[] { hashAlgo.Value } : SupportedHashAlgorithms;
+
+            foreach (var candidateHashAlgo in hashAlgorithmsToTry)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var header = await HeaderParser.TrySearchHashAlgorithmAsync(
-                    region, passwordBytes, hashAlgo, AlgorithmsByAscendingComponentCount, fromBackup, pim, cancellationToken).ConfigureAwait(false);
+                    region, passwordBytes, candidateHashAlgo, algorithmsToTry, fromBackup, pim, cancellationToken).ConfigureAwait(false);
                 if (header != null)
                 {
                     return header;

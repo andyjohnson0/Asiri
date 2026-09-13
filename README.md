@@ -113,8 +113,21 @@ finally
 }
 ```
 
-If you already know the container's algorithm, hash, and filesystem type, an overload of
-`OpenAsync` accepts them explicitly and skips the detection step. Every I/O method is
+If you already know the encryption algorithm, the hash algorithm, or both, passing what you know
+narrows the search accordingly. The filesystem type has no equivalent parameter: it's always
+detected directly from the decrypted volume's boot sector rather than searched for, so there's
+nothing to narrow on that axis.
+
+```csharp
+// Known algorithm, unknown hash: only the hash algorithm is searched for.
+var container = await VeraCryptContainer.OpenAsync(
+    new FileInfo(@"C:\path\to\container.hc"),
+    password: "correct horse battery staple",
+    algo: CryptoAlgorithm.Aes);
+```
+
+And if you already know the container's algorithm, hash, and filesystem type, a fully explicit
+overload of `OpenAsync` accepts all three and skips detection entirely. Every I/O method is
 `CancellationToken`-aware.
 
 ## Repository structure
