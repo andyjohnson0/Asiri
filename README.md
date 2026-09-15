@@ -1,10 +1,12 @@
 # Asiri
 
-Asiri provides standalone, read-only access to [VeraCrypt](https://veracrypt.io/) encrypted file
-containers from .NET, without depending on the VeraCrypt application itself. Given a container file
-and its password, it derives the keys, decrypts the volume header, and exposes the container's
-filesystem — files and directories — through a small, dependency-free abstraction that a consuming
-application can browse or read from directly.
+Asiri provides standalone access to [VeraCrypt](https://veracrypt.io/) encrypted file containers from
+.NET, without depending on the VeraCrypt application itself. Given a container file and its password,
+it derives the keys, decrypts the volume header, and exposes the container's filesystem — files and
+directories — through a small, dependency-free abstraction that a consuming application can browse
+and read from directly. Write access — creating, deleting, renaming, and moving files and
+directories, and modifying their content and attributes — is also available, opt-in and off by
+default.
 
 "Asiri" is the Swahili word for "secret".
 
@@ -16,18 +18,28 @@ instructions given by **Andrew Johnson** ([andy@andyjohnson.uk](mailto:andy@andy
 [andyjohnson.uk](https://andyjohnson.uk)), who prompted, reviewed, and directed the work.
 
 This is a hobby/experimental project exploring what an AI coding agent can produce end-to-end. It
-has **not** undergone independent security review or a cryptographic audit. It implements read-only
-container access only — it will never write to a container — but you should treat it accordingly:
-do not use it as your only means of accessing data you care about, and do not rely on it in any
-security-critical context without your own review.
+has **not** undergone independent security review or a cryptographic audit. Read access is the
+mature, well-exercised path; write access exists but is newer, opt-in, and has not yet been verified
+against real VeraCrypt (only against Asiri's own round-trip and synthetic tests — see below). Treat
+the whole library accordingly: do not use it as your only means of accessing data you care about, and
+do not rely on it in any security-critical context without your own review.
+
+**⚠️ Write access is pre-release and unverified against real VeraCrypt. Only use it on containers you
+have backed up.** A bug in the write path could corrupt a container beyond what VeraCrypt itself can
+open. Read access does not carry this risk.
 
 One thing that is independent of the agent: every real VeraCrypt container in
 `Asiri.Core.Tests/Test Data` was created using the actual VeraCrypt application, by Andrew, not
 generated or shaped by the agent. The agent never had the ability to make a test container's
 ciphertext agree with its own understanding of the format. As a result, mutating any test
 container's bytes and re-running the test suite will produce failures — a simple, independent check
-that the tests are exercising real decryption against real VeraCrypt output, not just checking the
+that the read path is exercising real decryption against real VeraCrypt output, not just checking the
 code's assumptions against themselves.
+
+Write access does not yet have an equivalent independent check: its tests confirm that Asiri's own
+encryption and decryption agree with each other (self-consistency), not that a container Asiri wrote
+to is still readable by real VeraCrypt. That verification is planned but not yet done — see the
+caution above.
 
 ## Status
 
@@ -69,8 +81,19 @@ exposes `Path`, `Parent`, `GetAttributesAsync()` (read-only, hidden, system, etc
 `EnumerateDirectoriesAsync()` with an optional search pattern; `IFile` adds `OpenReadAsync()` for
 streaming a large file's contents instead of buffering it all via `ReadAllBytesAsync()`.
 
+**Write access** (opt-in, off by default — see the caution above): opening a container with
+`ContainerAccessMode.ReadWrite` and then explicitly setting `IsWritable = true` enables creating,
+deleting, renaming, and moving files and directories, setting attributes and timestamps, and writing
+file content via `IFile.OpenWriteAsync()`. Both the access mode (checked at open time) and
+`IsWritable` (checked per-operation, and can be turned back off) must agree for a write to be
+allowed — this two-key gate is deliberate, so that opening a container for potential writing doesn't
+by itself put it at risk. Only fixed-size containers are supported for writing: Asiri cannot grow or
+shrink a container, so operations that would change its size beyond its existing free space behave
+the same as they would on a full disk.
+
 **Not supported, by design:**
-- Writing to a container — Asiri is read-only.
+- Changing a container's password or keyfiles.
+- Dynamic (growable) containers, or growing/shrinking a container's size.
 - Hidden volumes.
 - Encrypted partitions or drives — only container *files*.
 - The Kuznyechik cipher or Streebog hash (GOST algorithms), including every cascade involving
@@ -130,13 +153,58 @@ And if you already know the container's algorithm, hash, and filesystem type, a 
 overload of `OpenAsync` accepts all three and skips detection entirely. Every I/O method is
 `CancellationToken`-aware.
 
+## Writing to a container
+
+**⚠️ Back up the container file before running this. Write access is pre-release and has not been
+verified against real VeraCrypt — see the caution earlier in this README.**
+
+Writing requires two things: opening with `ContainerAccessMode.ReadWrite`, and then explicitly
+arming `IsWritable`. Either alone is not enough — this is intentional, so that code paths which
+merely *open* a container can't accidentally write to it.
+
+```csharp
+using System.IO;
+using System.Text;
+using uk.andyjohnson.Asiri.Abstractions;
+using uk.andyjohnson.Asiri.Core;
+
+var container = await VeraCryptContainer.OpenAsync(
+    new FileInfo(@"C:\path\to\container.hc"),
+    password: "correct horse battery staple",
+    accessMode: ContainerAccessMode.ReadWrite);
+
+container.IsWritable = true;
+
+try
+{
+    IDirectory root = container.Root;
+
+    IDirectory data = await root.CreateDirectoryAsync("data");
+    IFile file = await data.CreateFileAsync("notes.txt");
+
+    using (Stream stream = await file.OpenWriteAsync())
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes("hello from Asiri");
+        await stream.WriteAsync(bytes, 0, bytes.Length);
+    }
+
+    await file.RenameAsync("notes-renamed.txt");
+}
+finally
+{
+    container.Close();
+}
+```
+
+Only fixed-size containers are supported — Asiri cannot grow or shrink a container's size.
+
 ## Repository structure
 
 | Project | Purpose |
 |---|---|
 | [`Asiri.Abstractions`](Asiri.Abstractions) | Dependency-free filesystem contracts (`IDirectory`, `IFile`, `IFileSystemEntry`). Depends on nothing, so other software can target these interfaces without pulling in BouncyCastle or DiscUtils. |
-| [`Asiri.Core`](Asiri.Core) | The library itself: VeraCrypt header parsing (`HeaderParser`), sector-level decryption (`SectorDecryptor`, `DecryptedBlockDeviceStream`), the cipher and hash implementations (under `Crypto/`), the DiscUtils-backed filesystem adapters (under `Filesystem/`), and the public entry point, `VeraCryptContainer`. |
-| [`Asiri.Core.Tests`](Asiri.Core.Tests) | xUnit tests, run against real VeraCrypt container files checked into `Asiri.Core.Tests/Test Data` — covering every supported cipher/cascade, hash, filesystem, PIM, and keyfile combination — as well as synthetic, from-scratch header tests independent of the library's own crypto code. |
+| [`Asiri.Core`](Asiri.Core) | The library itself: VeraCrypt header parsing (`HeaderParser`), sector-level encryption and decryption (`SectorDecryptor`, `DecryptedBlockDeviceStream`), the cipher and hash implementations (under `Crypto/`), the DiscUtils-backed filesystem adapters (under `Filesystem/`), and the public entry point, `VeraCryptContainer`. |
+| [`Asiri.Core.Tests`](Asiri.Core.Tests) | xUnit tests, run against real VeraCrypt container files checked into `Asiri.Core.Tests/Test Data` — covering every supported cipher/cascade, hash, filesystem, PIM, and keyfile combination — as well as synthetic, from-scratch header tests independent of the library's own crypto code, and read-write tests covering create/delete/rename/move/attributes/timestamps across all three filesystems. |
 | [`Asiri.ContainerBrowser`](Asiri.ContainerBrowser) | A small WPF reference application: open a container, browse its folder tree, and view text files, images, or a hex dump of anything else. Demonstrates `Asiri.Core` as a consumer would use it. |
 
 Each project has its own `AGENT.md` describing the scope and conventions the agent worked to.

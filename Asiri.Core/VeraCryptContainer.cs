@@ -94,10 +94,38 @@ namespace uk.andyjohnson.Asiri.Core
         ExFat
     }
 
+    /// <summary>
+    /// The most permissive access to request when opening a VeraCrypt container - the ceiling for
+    /// that session, not a live switch. See <see cref="VeraCryptContainer.IsWritable"/> for the
+    /// separate, additional step actually required before any write is permitted even when
+    /// <see cref="ReadWrite"/> is requested here.
+    /// </summary>
+    public enum ContainerAccessMode
+    {
+        /// <summary>
+        /// The container can only be read. Opening with this mode - the default - can never be
+        /// upgraded to <see cref="ReadWrite"/> later without closing and reopening the container.
+        /// </summary>
+        ReadOnly,
+
+        /// <summary>
+        /// The container's underlying file is opened for writing, and exclusively (no other process,
+        /// or other Asiri container, can have it open at the same time) - but nothing can actually be
+        /// written until <see cref="VeraCryptContainer.IsWritable"/> is also explicitly set to true.
+        /// </summary>
+        ReadWrite
+    }
+
 
     /// <summary>
-    /// Provides read-only access to the contents of a VeraCrypt encrypted file container.
+    /// Provides access to the contents of a VeraCrypt encrypted file container, read-only by default.
     /// </summary>
+    /// <remarks>
+    /// This code is pre-production: it has not undergone independent security review or a
+    /// cryptographic audit. Writing to a container - opting into <see cref="ContainerAccessMode.ReadWrite"/>
+    /// and then setting <see cref="IsWritable"/> - modifies the container file in place, with no
+    /// undo. Only enable writing on a container you have a backup of.
+    /// </remarks>
     public sealed class VeraCryptContainer
     {
         private readonly DecryptedBlockDeviceStream _stream;
@@ -135,6 +163,14 @@ namespace uk.andyjohnson.Asiri.Core
         /// does not store keyfiles in the header, so, like the password and PIM, they must be
         /// supplied here.
         /// </param>
+        /// <param name="accessMode">
+        /// The most permissive access to open the container's underlying file with, or
+        /// <see cref="ContainerAccessMode.ReadOnly"/> - the default - for read-only. Opening with
+        /// <see cref="ContainerAccessMode.ReadWrite"/> does not by itself permit any write - see
+        /// <see cref="IsWritable"/>, a separate, additional step - but it does take an exclusive lock
+        /// on the file for the whole session, so only request it when you actually intend to write
+        /// during this session, not defensively "just in case".
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>A container whose <see cref="Root"/> exposes the decrypted filesystem.</returns>
         public static async Task<VeraCryptContainer> OpenAsync(
@@ -145,6 +181,7 @@ namespace uk.andyjohnson.Asiri.Core
             FileSystemType fsType,
             int pim = 0,
             IEnumerable<FileInfo> keyFiles = null,
+            ContainerAccessMode accessMode = ContainerAccessMode.ReadOnly,
             CancellationToken cancellationToken = default)
         {
             if (path == null)
@@ -185,13 +222,14 @@ namespace uk.andyjohnson.Asiri.Core
                 throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
             }
 
+            var canWrite = accessMode == ContainerAccessMode.ReadWrite;
             var header = await HeaderParser.ParseAsync(path, password, algo, hashAlgo, pim, keyFiles, cancellationToken).ConfigureAwait(false);
-            var decryptor = await SectorDecryptor.CreateAsync(path, header, cancellationToken).ConfigureAwait(false);
+            var decryptor = await SectorDecryptor.CreateAsync(path, header, canWrite, cancellationToken).ConfigureAwait(false);
             var stream = new DecryptedBlockDeviceStream(decryptor);
 
             try
             {
-                var lifetime = new ContainerLifetime();
+                var lifetime = new ContainerLifetime { MaxAccessMode = accessMode };
                 var (fileSystem, root) = await OpenFileSystemAsync(fsType, stream, lifetime, cancellationToken).ConfigureAwait(false);
                 return new VeraCryptContainer(stream, fileSystem, lifetime, root, algo, hashAlgo, fsType);
             }
@@ -253,6 +291,10 @@ namespace uk.andyjohnson.Asiri.Core
         /// supported <see cref="HashAlgorithm"/>. Supplying this when known skips the (up to 3) other
         /// hash algorithms' derivations entirely, rather than only trying them after this one fails.
         /// </param>
+        /// <param name="accessMode">
+        /// The most permissive access to open the container's underlying file with - see the
+        /// explicit-parameters overload's own remarks on this parameter.
+        /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>A container whose <see cref="Root"/> exposes the decrypted filesystem.</returns>
         public static async Task<VeraCryptContainer> OpenAsync(
@@ -262,6 +304,7 @@ namespace uk.andyjohnson.Asiri.Core
             IEnumerable<FileInfo> keyFiles = null,
             CryptoAlgorithm? algo = null,
             HashAlgorithm? hashAlgo = null,
+            ContainerAccessMode accessMode = ContainerAccessMode.ReadOnly,
             CancellationToken cancellationToken = default)
         {
             if (path == null)
@@ -293,13 +336,14 @@ namespace uk.andyjohnson.Asiri.Core
                     "The password may be incorrect, or the container may not be a valid VeraCrypt volume.");
             }
 
-            var decryptor = await SectorDecryptor.CreateAsync(path, header, cancellationToken).ConfigureAwait(false);
+            var canWrite = accessMode == ContainerAccessMode.ReadWrite;
+            var decryptor = await SectorDecryptor.CreateAsync(path, header, canWrite, cancellationToken).ConfigureAwait(false);
             var stream = new DecryptedBlockDeviceStream(decryptor);
 
             try
             {
                 var fsType = await DetectFileSystemTypeAsync(decryptor, cancellationToken).ConfigureAwait(false);
-                var lifetime = new ContainerLifetime();
+                var lifetime = new ContainerLifetime { MaxAccessMode = accessMode };
                 var (fileSystem, root) = await OpenFileSystemAsync(fsType, stream, lifetime, cancellationToken).ConfigureAwait(false);
                 return new VeraCryptContainer(stream, fileSystem, lifetime, root, header.Algorithm, header.HashAlgorithm, fsType);
             }
@@ -376,7 +420,7 @@ namespace uk.andyjohnson.Asiri.Core
         /// <summary>
         /// Every <see cref="HashAlgorithm"/> this library supports, in the order
         /// <see cref="TryAllCombinationsAsync"/> tries them when the caller hasn't already narrowed
-        /// it down via <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, CancellationToken)"/>'s
+        /// it down via <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, ContainerAccessMode, CancellationToken)"/>'s
         /// <c>hashAlgo</c> parameter. Also doubles as the validation set for that parameter - see
         /// <c>SupportedHashAlgorithms.Contains</c> in <c>OpenAsync</c> above.
         /// </summary>
@@ -390,7 +434,7 @@ namespace uk.andyjohnson.Asiri.Core
         /// scaffolding (reading header regions, mixing keyfiles) as a single, one-combination search,
         /// rather than <see cref="HeaderParser.ParseAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, int, IEnumerable{FileInfo}, CancellationToken)"/>'s
         /// more direct path - a caller with full knowledge of both should prefer the fully-explicit
-        /// <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, CancellationToken)"/>
+        /// <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/>
         /// overload instead, which also skips filesystem-type detection.
         /// </summary>
         private static async Task<VeraCryptHeader> TryAllCombinationsAsync(
@@ -550,44 +594,87 @@ namespace uk.andyjohnson.Asiri.Core
 
         /// <summary>
         /// The encryption algorithm the container was opened with - either as given to the
-        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, CancellationToken)"/>,
-        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CancellationToken)"/>.
+        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/>,
+        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, ContainerAccessMode, CancellationToken)"/>.
         /// </summary>
         public CryptoAlgorithm Algorithm { get; private set; }
 
         /// <summary>
         /// The hash algorithm the container was opened with - either as given to the
-        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, CancellationToken)"/>,
-        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CancellationToken)"/>.
+        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/>,
+        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, ContainerAccessMode, CancellationToken)"/>.
         /// </summary>
         public HashAlgorithm HashAlgorithm { get; private set; }
 
         /// <summary>
         /// The filesystem type detected within the container - either as given to the
-        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, CancellationToken)"/>,
-        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CancellationToken)"/>.
+        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/>,
+        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, ContainerAccessMode, CancellationToken)"/>.
         /// </summary>
         public FileSystemType FileSystemType { get; private set; }
 
+        /// <summary>
+        /// Whether writing is currently armed. Starts false even when this container was opened with
+        /// <see cref="ContainerAccessMode.ReadWrite"/> - opening for write access and actually
+        /// permitting a write are two separate, both-required steps, deliberately: an errant code
+        /// path that opens a container read-write when it shouldn't have still can't write anything
+        /// without this also being set. Every mutating <see cref="IFile"/>/<see cref="IDirectory"/>
+        /// call checks this at the moment it's made (or, for <see cref="IFile.OpenWriteAsync"/>, at
+        /// the moment the write stream is opened) - not continuously for the lifetime of an
+        /// already-open write stream, so setting this false does not retroactively stop a write
+        /// already in progress through a stream obtained earlier.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when setting this true if the container was opened with
+        /// <see cref="ContainerAccessMode.ReadOnly"/>: that ceiling can only be raised by closing and
+        /// reopening the container with <see cref="ContainerAccessMode.ReadWrite"/>, never at runtime.
+        /// </exception>
+        public bool IsWritable
+        {
+            get => _lifetime.IsWritable;
+            set
+            {
+                _lifetime.ThrowIfClosed();
+                if (value && _lifetime.MaxAccessMode != ContainerAccessMode.ReadWrite)
+                {
+                    throw new InvalidOperationException(
+                        "Cannot enable writing: this container was opened with ContainerAccessMode.ReadOnly. " +
+                        "Close it and reopen with ContainerAccessMode.ReadWrite instead.");
+                }
+                _lifetime.IsWritable = value;
+            }
+        }
 
         /// <summary>
         /// Closes the container and releases the underlying filesystem and stream. Safe to call
         /// more than once: only the first call has any effect.
         /// </summary>
+        /// <remarks>
+        /// Takes <see cref="ContainerLifetime.Lock"/> - the same lock every read or write call takes
+        /// only around its own DiscUtils call, not its whole async lifetime - so this can't tear the
+        /// filesystem/stream down while one of those calls is actually in flight on another thread.
+        /// Without this, closing a container (e.g. an app exiting, or the user clicking "close"
+        /// immediately) while a write was still mid-flight could dispose the stream out from under a
+        /// DiscUtils call that was partway through a multi-step on-disk update (an index or MFT
+        /// change spanning more than one write), corrupting it - not merely throwing.
+        /// </remarks>
         public void Close()
         {
-            // Deliberately idempotent by our own tracking, not by relying on the underlying
-            // DiscFileSystem/Stream types' own Dispose() being safe to call twice: at least one
-            // DiscUtils filesystem implementation is not (confirmed empirically to throw
-            // NullReferenceException on a second Dispose() call).
-            if (_lifetime.IsClosed)
+            lock (_lifetime.Lock)
             {
-                return;
-            }
+                // Deliberately idempotent by our own tracking, not by relying on the underlying
+                // DiscFileSystem/Stream types' own Dispose() being safe to call twice: at least one
+                // DiscUtils filesystem implementation is not (confirmed empirically to throw
+                // NullReferenceException on a second Dispose() call).
+                if (_lifetime.IsClosed)
+                {
+                    return;
+                }
 
-            _lifetime.IsClosed = true;
-            _fileSystem.Dispose();
-            _stream.Dispose();
+                _lifetime.IsClosed = true;
+                _fileSystem.Dispose();
+                _stream.Dispose();
+            }
         }
     }
 }

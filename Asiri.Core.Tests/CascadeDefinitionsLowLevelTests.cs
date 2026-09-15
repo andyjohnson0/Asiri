@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 
 namespace uk.andyjohnson.Asiri.Core.Tests
@@ -46,6 +47,15 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             Assert.Equal(expected.Length, actual);
         }
 
+        [Theory]
+        [MemberData(nameof(DecryptOrderCases))]
+        public void GetEncryptOrder_ReturnsReverseOfDecryptOrder(CryptoAlgorithm algorithm, CryptoAlgorithm[] decryptOrder)
+        {
+            var expected = decryptOrder.Reverse().ToArray();
+            var actual = (CryptoAlgorithm[])InvokeCascadeDefinitions("GetEncryptOrder", algorithm);
+            Assert.Equal(expected, actual);
+        }
+
         [Fact]
         public void Decrypt_AesTwofishSerpentCascade_MatchesManuallyChainedSingleCipherDecrypts()
         {
@@ -76,13 +86,57 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             var aesTweak = tweakKey[64..96];
 
             // Decryption is applied Aes, then Twofish, then Serpent - the display name's own order.
-            var afterAes = InvokeSingleCipher("XtsAesCipher", cipherText, aesData, aesTweak, dataUnitNumber);
-            var afterTwofish = InvokeSingleCipher("XtsTwofishCipher", afterAes, twofishData, twofishTweak, dataUnitNumber);
-            var expected = InvokeSingleCipher("XtsSerpentCipher", afterTwofish, serpentData, serpentTweak, dataUnitNumber);
+            var afterAes = InvokeSingleCipher("XtsAesCipher", "Decrypt", cipherText, aesData, aesTweak, dataUnitNumber);
+            var afterTwofish = InvokeSingleCipher("XtsTwofishCipher", "Decrypt", afterAes, twofishData, twofishTweak, dataUnitNumber);
+            var expected = InvokeSingleCipher("XtsSerpentCipher", "Decrypt", afterTwofish, serpentData, serpentTweak, dataUnitNumber);
 
-            var actual = InvokeSelectorDecrypt(CryptoAlgorithm.AesTwofishSerpent, cipherText, dataKey, tweakKey, dataUnitNumber);
+            var actual = InvokeSelector("Decrypt", CryptoAlgorithm.AesTwofishSerpent, cipherText, dataKey, tweakKey, dataUnitNumber);
 
             Assert.Equal(expected, actual);
+        }
+
+        [Fact]
+        public void Encrypt_AesTwofishSerpentCascade_MatchesManuallyChainedSingleCipherEncrypts()
+        {
+            var dataKey = new byte[96];
+            var tweakKey = new byte[96];
+            for (var i = 0; i < 96; i++)
+            {
+                dataKey[i] = (byte)i;
+                tweakKey[i] = (byte)(255 - i);
+            }
+            var plainText = new byte[32];
+            for (var i = 0; i < plainText.Length; i++)
+            {
+                plainText[i] = (byte)(0x5A ^ i);
+            }
+            const long dataUnitNumber = 7L;
+
+            // Encrypt order for AES-Twofish-Serpent is the reverse of its decrypt order (Aes,
+            // Twofish, Serpent), i.e. Serpent, Twofish, Aes - and key segments are laid out in that
+            // same encrypt order, so segment 0 => Serpent, segment 1 => Twofish, segment 2 => Aes,
+            // exactly as for Decrypt above (the segment layout doesn't depend on which direction is
+            // being performed).
+            var serpentData = dataKey[0..32];
+            var serpentTweak = tweakKey[0..32];
+            var twofishData = dataKey[32..64];
+            var twofishTweak = tweakKey[32..64];
+            var aesData = dataKey[64..96];
+            var aesTweak = tweakKey[64..96];
+
+            var afterSerpent = InvokeSingleCipher("XtsSerpentCipher", "Encrypt", plainText, serpentData, serpentTweak, dataUnitNumber);
+            var afterTwofish = InvokeSingleCipher("XtsTwofishCipher", "Encrypt", afterSerpent, twofishData, twofishTweak, dataUnitNumber);
+            var expected = InvokeSingleCipher("XtsAesCipher", "Encrypt", afterTwofish, aesData, aesTweak, dataUnitNumber);
+
+            var actual = InvokeSelector("Encrypt", CryptoAlgorithm.AesTwofishSerpent, plainText, dataKey, tweakKey, dataUnitNumber);
+
+            Assert.Equal(expected, actual);
+
+            // Ties this back to Decrypt's own already-trusted cascade ordering (see the class doc
+            // comment on XtsCipherSelectorLowLevelTests for why that matters more than a bare
+            // round trip would).
+            var decrypted = InvokeSelector("Decrypt", CryptoAlgorithm.AesTwofishSerpent, actual, dataKey, tweakKey, dataUnitNumber);
+            Assert.Equal(plainText, decrypted);
         }
 
         private static object InvokeCascadeDefinitions(string methodName, CryptoAlgorithm algorithm)
@@ -92,18 +146,18 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             return method.Invoke(null, new object[] { algorithm })!;
         }
 
-        private static byte[] InvokeSingleCipher(string typeName, byte[] cipherText, byte[] dataKey, byte[] tweakKey, long dataUnitNumber)
+        private static byte[] InvokeSingleCipher(string typeName, string methodName, byte[] input, byte[] dataKey, byte[] tweakKey, long dataUnitNumber)
         {
-            var method = GetInternalType(typeName).GetMethod("Decrypt", BindingFlags.Public | BindingFlags.Static)
-                       ?? throw new InvalidOperationException($"{typeName}.Decrypt method not found.");
-            return (byte[])method.Invoke(null, new object[] { cipherText, dataKey, tweakKey, dataUnitNumber })!;
+            var method = GetInternalType(typeName).GetMethod(methodName, BindingFlags.Public | BindingFlags.Static)
+                       ?? throw new InvalidOperationException($"{typeName}.{methodName} method not found.");
+            return (byte[])method.Invoke(null, new object[] { input, dataKey, tweakKey, dataUnitNumber })!;
         }
 
-        private static byte[] InvokeSelectorDecrypt(CryptoAlgorithm algorithm, byte[] cipherText, byte[] dataKey, byte[] tweakKey, long dataUnitNumber)
+        private static byte[] InvokeSelector(string methodName, CryptoAlgorithm algorithm, byte[] input, byte[] dataKey, byte[] tweakKey, long dataUnitNumber)
         {
-            var method = GetInternalType("XtsCipherSelector").GetMethod("Decrypt", BindingFlags.Public | BindingFlags.Static)
-                       ?? throw new InvalidOperationException("XtsCipherSelector.Decrypt method not found.");
-            return (byte[])method.Invoke(null, new object[] { algorithm, cipherText, dataKey, tweakKey, dataUnitNumber })!;
+            var method = GetInternalType("XtsCipherSelector").GetMethod(methodName, BindingFlags.Public | BindingFlags.Static)
+                       ?? throw new InvalidOperationException($"XtsCipherSelector.{methodName} method not found.");
+            return (byte[])method.Invoke(null, new object[] { algorithm, input, dataKey, tweakKey, dataUnitNumber })!;
         }
 
         private static Type GetInternalType(string name)

@@ -7,8 +7,12 @@ This document takes precedence over all other instructions for the Asiri.Core pr
   Focus on the *Encryption Scheme* and *Volume Format* sections.
 
 ## Scope
-- Implement read‑only access to VeraCrypt encrypted file containers.
-- Do not implement write support.
+- Implement read access to VeraCrypt encrypted file containers.
+- Implement write access to VeraCrypt encrypted file containers, gated by
+  `VeraCryptContainer.ContainerAccessMode` (an open-time ceiling) and `VeraCryptContainer.IsWritable`
+  (a separate, explicit runtime arm/disarm switch, off by default even when opened for read-write) -
+  both must be set before any write is permitted. Limited to fixed-size containers: do not implement
+  growing or shrinking a container's size, or changing its password or keyfiles.
 - Do not implement support for encrypted partitions or drives.
 - Do not implement hidden volumes.
 - Implement AES, Serpent, Twofish, and Camellia.
@@ -32,7 +36,8 @@ This document takes precedence over all other instructions for the Asiri.Core pr
   in the header and never searched for; the caller must supply it, like the password.
 - Derive keys exactly as specified in VeraCrypt documentation.
 - Use XTS mode, built on BouncyCastle's block ciphers, for every supported single cipher and cascade.
-- Implement sector‑based decryption.
+- Implement sector‑based decryption, and, when writing, sector-based encryption (XTS operates on
+  whole data units, so a write smaller than a sector requires a read-modify-write of that sector).
 - Do not pre‑decrypt the entire container.
 - Decrypt sectors on demand only.
 - Implement full VeraCrypt header parsing:
@@ -59,6 +64,11 @@ This document takes precedence over all other instructions for the Asiri.Core pr
 - Implement `IDirectory` and `IFile`, including their `Path`, `Parent`, attribute, and timestamp
   members (`IFileSystemEntry`), `IDirectory`'s `EnumerateFilesAsync`/`EnumerateDirectoriesAsync`,
   and `IFile.OpenReadAsync`.
+- Implement the write members of `IFileSystemEntry`/`IDirectory`/`IFile`: `RenameAsync`,
+  `MoveToAsync`, `SetAttributesAsync`, `SetCreationTimeUtcAsync`, `SetLastWriteTimeUtcAsync`,
+  `IDirectory.CreateDirectoryAsync`/`CreateFileAsync`/`DeleteAsync`, and
+  `IFile.OpenWriteAsync`/`DeleteAsync`. Each throws if the container is not currently open for
+  writing (see Scope above).
 - Each of the three filesystem backends (NTFS, FAT, exFAT) implements these independently, matching
   the existing pattern (no shared base class between the NTFS/FAT/exFAT directory or file wrappers).
 - Expose the filesystem via `VeraCryptContainer.Root`.

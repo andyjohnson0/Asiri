@@ -28,5 +28,23 @@ namespace uk.andyjohnson.Asiri.Core.Crypto
 
             return XtsBlockCipher.Decrypt(dataCipher, tweakCipher, cipherText, dataUnitNumber);
         }
+
+        /// <summary>
+        /// Encrypts a single data unit that is a whole number of Twofish blocks in length.
+        /// </summary>
+        /// <param name="plainText">The plaintext to encrypt.</param>
+        /// <param name="dataKey">The 256-bit key used to encrypt the data blocks.</param>
+        /// <param name="tweakKey">The 256-bit key used to encrypt the data unit tweak.</param>
+        /// <param name="dataUnitNumber">The sequence number of the data unit.</param>
+        public static byte[] Encrypt(byte[] plainText, byte[] dataKey, byte[] tweakKey, long dataUnitNumber)
+        {
+            var dataCipher = new TwofishEngine();
+            dataCipher.Init(true, new KeyParameter(dataKey));
+
+            var tweakCipher = new TwofishEngine();
+            tweakCipher.Init(true, new KeyParameter(tweakKey));
+
+            return XtsBlockCipher.Encrypt(dataCipher, tweakCipher, plainText, dataUnitNumber);
+        }
     }
 }

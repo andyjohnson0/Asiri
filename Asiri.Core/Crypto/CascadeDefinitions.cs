@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace uk.andyjohnson.Asiri.Core.Crypto
 {
@@ -55,6 +56,18 @@ namespace uk.andyjohnson.Asiri.Core.Crypto
         public static int GetComponentCount(CryptoAlgorithm algorithm)
         {
             return GetDecryptOrder(algorithm).Length;
+        }
+
+        /// <summary>
+        /// The single ciphers that <paramref name="algorithm"/> encrypts as, in encryption order -
+        /// the exact reverse of <see cref="GetDecryptOrder"/>, per VeraCrypt's own cascade
+        /// convention (a cascade must be un-applied in the opposite order it was applied). For a
+        /// single-cipher algorithm this is the same one-element array <see cref="GetDecryptOrder"/>
+        /// returns.
+        /// </summary>
+        public static CryptoAlgorithm[] GetEncryptOrder(CryptoAlgorithm algorithm)
+        {
+            return GetDecryptOrder(algorithm).Reverse().ToArray();
         }
 
         /// <summary>

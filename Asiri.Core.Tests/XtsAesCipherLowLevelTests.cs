@@ -43,6 +43,26 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         }
 
         [Fact]
+        public void Encrypt_PublishedIeee1619XtsAes256Vector_ProducesExpectedCiphertext()
+        {
+            // The independent-oracle counterpart to the Decrypt test above: encrypting the vector's
+            // known plaintext must reproduce its known ciphertext exactly. This is what makes Encrypt
+            // trustworthy beyond "it round-trips with our own Decrypt" - a bug that broke both
+            // Encrypt and Decrypt identically (e.g. a wrong key half, or a wrong tweak direction)
+            // could still round-trip with itself while never matching this externally-published
+            // vector.
+            var key = Convert.FromHexString(KeyHex);
+            var key1 = key[..32];
+            var key2 = key[32..];
+            var plaintext = Convert.FromHexString(PlaintextHex);
+            var expectedCiphertext = Convert.FromHexString(CiphertextHex);
+
+            var actualCiphertext = InvokeEncrypt(plaintext, key1, key2, DataUnitNumber);
+
+            Assert.Equal(expectedCiphertext, actualCiphertext);
+        }
+
+        [Fact]
         public void Decrypt_WithKey1AndKey2Swapped_DoesNotProduceExpectedPlaintext()
         {
             // If key ordering didn't matter to this implementation, the preceding test could pass
@@ -61,11 +81,21 @@ namespace uk.andyjohnson.Asiri.Core.Tests
 
         private static byte[] InvokeDecrypt(byte[] cipherText, byte[] dataKey, byte[] tweakKey, long dataUnitNumber)
         {
+            return InvokeXtsAesCipher("Decrypt", cipherText, dataKey, tweakKey, dataUnitNumber);
+        }
+
+        private static byte[] InvokeEncrypt(byte[] plainText, byte[] dataKey, byte[] tweakKey, long dataUnitNumber)
+        {
+            return InvokeXtsAesCipher("Encrypt", plainText, dataKey, tweakKey, dataUnitNumber);
+        }
+
+        private static byte[] InvokeXtsAesCipher(string methodName, byte[] input, byte[] dataKey, byte[] tweakKey, long dataUnitNumber)
+        {
             var type = Array.Find(typeof(HeaderParser).Assembly.GetTypes(), t => t.Name == "XtsAesCipher")
                        ?? throw new InvalidOperationException("XtsAesCipher type not found.");
-            var method = type.GetMethod("Decrypt", BindingFlags.Public | BindingFlags.Static)
-                       ?? throw new InvalidOperationException("XtsAesCipher.Decrypt method not found.");
-            return (byte[])method.Invoke(null, new object[] { cipherText, dataKey, tweakKey, dataUnitNumber })!;
+            var method = type.GetMethod(methodName, BindingFlags.Public | BindingFlags.Static)
+                       ?? throw new InvalidOperationException($"XtsAesCipher.{methodName} method not found.");
+            return (byte[])method.Invoke(null, new object[] { input, dataKey, tweakKey, dataUnitNumber })!;
         }
     }
 }

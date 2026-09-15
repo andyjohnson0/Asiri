@@ -13,10 +13,16 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.Fat
     /// An <see cref="IFile"/> backed by a file in a DiscUtils <see cref="FatFileSystem"/>. Not
     /// exposed publicly: callers only ever see the <see cref="IFile"/> interface.
     /// </summary>
+    /// <remarks>
+    /// Every call into <c>_fat</c> below - reads and writes alike - is made under
+    /// <c>_lifetime.Lock</c>, shared by every entry descended from the same container: DiscUtils'
+    /// filesystem implementations report <c>IsThreadSafe = false</c>, so two calls into the same
+    /// instance from different threads are not guaranteed safe even when both are reads.
+    /// </remarks>
     internal sealed class FatFile : IFile
     {
         private readonly FatFileSystem _fat;
-        private readonly string _path;
+        private string _path;
         private readonly ContainerLifetime _lifetime;
 
         internal FatFile(FatFileSystem fat, string path, ContainerLifetime lifetime)
@@ -65,7 +71,10 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.Fat
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 _lifetime.ThrowIfClosed();
-                return _fat.GetAttributes(_path);
+                lock (_lifetime.Lock)
+                {
+                    return _fat.GetAttributes(_path);
+                }
             }, cancellationToken);
         }
 
@@ -77,7 +86,10 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.Fat
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 _lifetime.ThrowIfClosed();
-                return _fat.GetCreationTimeUtc(_path);
+                lock (_lifetime.Lock)
+                {
+                    return _fat.GetCreationTimeUtc(_path);
+                }
             }, cancellationToken);
         }
 
@@ -89,7 +101,10 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.Fat
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 _lifetime.ThrowIfClosed();
-                return _fat.GetLastWriteTimeUtc(_path);
+                lock (_lifetime.Lock)
+                {
+                    return _fat.GetLastWriteTimeUtc(_path);
+                }
             }, cancellationToken);
         }
 
@@ -102,7 +117,10 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.Fat
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 _lifetime.ThrowIfClosed();
-                return _fat.GetFileLength(_path);
+                lock (_lifetime.Lock)
+                {
+                    return _fat.GetFileLength(_path);
+                }
             }, cancellationToken);
         }
 
@@ -116,11 +134,14 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.Fat
                 cancellationToken.ThrowIfCancellationRequested();
                 _lifetime.ThrowIfClosed();
 
-                using (var stream = _fat.OpenFile(_path, FileMode.Open, FileAccess.Read))
-                using (var buffer = new MemoryStream())
+                lock (_lifetime.Lock)
                 {
-                    stream.CopyTo(buffer);
-                    return buffer.ToArray();
+                    using (var stream = _fat.OpenFile(_path, FileMode.Open, FileAccess.Read))
+                    using (var buffer = new MemoryStream())
+                    {
+                        stream.CopyTo(buffer);
+                        return buffer.ToArray();
+                    }
                 }
             }, cancellationToken);
         }
@@ -147,7 +168,159 @@ namespace uk.andyjohnson.Asiri.Core.Filesystem.Fat
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 _lifetime.ThrowIfClosed();
-                return (Stream)_fat.OpenFile(_path, FileMode.Open, FileAccess.Read);
+                lock (_lifetime.Lock)
+                {
+                    return (Stream)_fat.OpenFile(_path, FileMode.Open, FileAccess.Read);
+                }
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task<Stream> OpenWriteAsync(CancellationToken cancellationToken = default)
+        {
+            // Checked once, here, at the moment the stream is opened - not enforced for the returned
+            // stream's whole lifetime. See the interface doc comment for why.
+            _lifetime.ThrowIfClosed();
+            _lifetime.ThrowIfNotWritable();
+
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                _lifetime.ThrowIfNotWritable();
+                lock (_lifetime.Lock)
+                {
+                    return (Stream)_fat.OpenFile(_path, FileMode.Create, FileAccess.ReadWrite);
+                }
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task DeleteAsync(CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            _lifetime.ThrowIfNotWritable();
+
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                _lifetime.ThrowIfNotWritable();
+                lock (_lifetime.Lock)
+                {
+                    _fat.DeleteFile(_path);
+                }
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task RenameAsync(string newName, CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            _lifetime.ThrowIfNotWritable();
+            if (newName == null)
+            {
+                throw new ArgumentNullException(nameof(newName));
+            }
+
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                _lifetime.ThrowIfNotWritable();
+
+                var parentPath = FatPathHelper.GetParentPath(_path);
+                var newPath = FatPathHelper.Combine(parentPath, newName);
+
+                lock (_lifetime.Lock)
+                {
+                    _fat.MoveFile(_path, newPath, false);
+                }
+                _path = newPath;
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task MoveToAsync(IDirectory destination, CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            _lifetime.ThrowIfNotWritable();
+            if (destination == null)
+            {
+                throw new ArgumentNullException(nameof(destination));
+            }
+            if (!(destination is FatDirectory fatDestination) || !ReferenceEquals(fatDestination.FileSystem, _fat))
+            {
+                throw new ArgumentException("The destination directory must be from the same container.", nameof(destination));
+            }
+
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                _lifetime.ThrowIfNotWritable();
+
+                var newPath = FatPathHelper.Combine(fatDestination.Path, Name);
+
+                lock (_lifetime.Lock)
+                {
+                    _fat.MoveFile(_path, newPath, false);
+                }
+                _path = newPath;
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task SetAttributesAsync(FileAttributes attributes, CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            _lifetime.ThrowIfNotWritable();
+
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                _lifetime.ThrowIfNotWritable();
+                lock (_lifetime.Lock)
+                {
+                    _fat.SetAttributes(_path, attributes);
+                }
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task SetCreationTimeUtcAsync(DateTime creationTimeUtc, CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            _lifetime.ThrowIfNotWritable();
+
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                _lifetime.ThrowIfNotWritable();
+                lock (_lifetime.Lock)
+                {
+                    _fat.SetCreationTimeUtc(_path, creationTimeUtc);
+                }
+            }, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task SetLastWriteTimeUtcAsync(DateTime lastWriteTimeUtc, CancellationToken cancellationToken = default)
+        {
+            _lifetime.ThrowIfClosed();
+            _lifetime.ThrowIfNotWritable();
+
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _lifetime.ThrowIfClosed();
+                _lifetime.ThrowIfNotWritable();
+                lock (_lifetime.Lock)
+                {
+                    _fat.SetLastWriteTimeUtc(_path, lastWriteTimeUtc);
+                }
             }, cancellationToken);
         }
     }

@@ -1,0 +1,26 @@
+<Window x:Class="uk.andyjohnson.Asiri.ContainerBrowser.EntryPropertiesDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="360" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False">
+    <StackPanel Margin="16">
+        <TextBlock Text="Attributes:" Margin="0,0,0,6" FontWeight="Bold"/>
+        <CheckBox x:Name="ReadOnlyCheckBox" Content="Read-only" Margin="0,0,0,4"/>
+        <CheckBox x:Name="HiddenCheckBox" Content="Hidden" Margin="0,0,0,4"/>
+        <CheckBox x:Name="SystemCheckBox" Content="System" Margin="0,0,0,4"/>
+        <CheckBox x:Name="ArchiveCheckBox" Content="Archive" Margin="0,0,0,4"/>
+
+        <TextBlock Text="Creation time (UTC):" Margin="0,12,0,6" FontWeight="Bold"/>
+        <TextBox x:Name="CreationTimeTextBox"/>
+
+        <TextBlock Text="Last write time (UTC):" Margin="0,12,0,6" FontWeight="Bold"/>
+        <TextBox x:Name="LastWriteTimeTextBox"/>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+            <Button x:Name="OkButton" Content="OK" IsDefault="True" Width="75" Margin="0,0,8,0" Click="OkButton_Click"/>
+            <Button x:Name="CancelButton" Content="Cancel" IsCancel="True" Width="75"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

@@ -68,6 +68,9 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 
         public HashAlgorithm? HashAlgorithm => ((AlgorithmOption<HashAlgorithm>)HashAlgorithmComboBox.SelectedItem).Value;
 
+        public ContainerAccessMode AccessMode =>
+            EnableWriteAccessCheckBox.IsChecked == true ? ContainerAccessMode.ReadWrite : ContainerAccessMode.ReadOnly;
+
         private void AddKeyFileButton_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new OpenFileDialog
