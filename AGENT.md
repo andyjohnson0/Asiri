@@ -24,7 +24,13 @@ is and isn't supported.
 - Implement write access to VeraCrypt encrypted file containers - opt-in and off by default (an
   explicit access-mode-at-open-time plus a separate, explicit runtime arm/disarm switch must both be
   set before anything can be written), and limited to fixed-size containers: do not implement growing
-  or shrinking a container's size, or changing its password or keyfiles.
+  or shrinking a container's size.
+- Implement changing a container's password, keyfiles, PIM, and/or hash algorithm
+  (`VeraCryptContainer.ChangePasswordAsync`) without touching its contents - the master/secondary key
+  never changes, only the header's own encryption key does. The encryption algorithm itself cannot
+  change this way, matching VeraCrypt's own behaviour. Unlike VeraCrypt, do not implement its optional
+  multi-pass anti-forensic overwrite of the old header, and do not preserve the container file's own
+  timestamps - both deliberate scope reductions, not oversights.
 - Do not implement support for encrypted partitions or drives.
 - Do not implement hidden volumes.
 - Supported encryption algorithms: AES, Serpent, Twofish, Camellia, and the cascades AES-Twofish,

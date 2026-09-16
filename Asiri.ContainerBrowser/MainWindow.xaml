@@ -108,6 +108,12 @@
                     </MenuItem.Icon>
                 </MenuItem>
                 <Separator/>
+                <MenuItem Header="Change _Password..." Click="ChangePasswordMenuItem_Click">
+                    <MenuItem.Icon>
+                        <svgc:SvgViewbox Source="Icons/key.svg" Width="16" Height="16"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator/>
                 <MenuItem x:Name="WritingEnabledMenuItem" Header="Enable _Writing" IsCheckable="True"
                           IsEnabled="False" Click="WritingEnabledMenuItem_Click"/>
                 <Separator/>

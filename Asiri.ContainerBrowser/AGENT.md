@@ -35,6 +35,12 @@ This document takes precedence over all other instructions for the Asiri.Contain
 - Support dragging a file out of the tree to export a decrypted copy to another application (e.g.
   Explorer) - this is a read operation, so it doesn't require writing to be armed, unlike moving a
   file or directory within the container, which does.
+- Provide a way to change a container's password, keyfiles, PIM, and/or hash algorithm via
+  `VeraCryptContainer.ChangePasswordAsync`, as its own command independent of whatever container (if
+  any) is currently open in the window - that method is static and operates on a file the user picks
+  fresh each time, since it never needs a container mounted at all. Since that method has no
+  auto-detecting overload, prompt for the current encryption and hash algorithm explicitly rather
+  than treating them as optional the way the ordinary Open flow does.
 - Provide a way to close the VeraCrypt container.
 - Use bootstrap svg icons if necessary. I've added a dependency on SharpVectors.Wpf - use it if you want.
 - Do not implement unneccessary functionality not described here.

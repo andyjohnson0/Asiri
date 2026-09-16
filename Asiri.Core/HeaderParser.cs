@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,7 +11,9 @@ using uk.andyjohnson.Asiri.Core.Crypto.Hash;
 namespace uk.andyjohnson.Asiri.Core
 {
     /// <summary>
-    /// Reads and decrypts the volume header of a VeraCrypt file container.
+    /// Reads and decrypts the volume header of a VeraCrypt file container - and, for
+    /// <see cref="VeraCryptContainer.ChangePasswordAsync"/>, rebuilds one under a new set of
+    /// credentials.
     /// </summary>
     public static class HeaderParser
     {
@@ -255,6 +258,106 @@ namespace uk.andyjohnson.Asiri.Core
             return buffer;
         }
 
+        /// <summary>
+        /// Writes a <see cref="HeaderRegionSize"/>-byte region - as built by
+        /// <see cref="BuildHeaderRegionAsync"/> - to the given byte offset in an already-open,
+        /// writable stream. The write-side counterpart to <see cref="ReadRegionAsync"/>.
+        /// </summary>
+        internal static Task WriteRegionAsync(Stream stream, long offset, byte[] region, CancellationToken cancellationToken)
+        {
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                WriteRegion(stream, offset, region);
+            }, cancellationToken);
+        }
+
+        private static void WriteRegion(Stream stream, long offset, byte[] region)
+        {
+            stream.Seek(offset, SeekOrigin.Begin);
+            stream.Write(region, 0, region.Length);
+        }
+
+        /// <summary>
+        /// Builds a fresh <see cref="HeaderRegionSize"/>-byte header region (a random salt followed
+        /// by the encrypted header) that decrypts, with the given new credentials, to the exact same
+        /// plaintext header bytes as <paramref name="decryptedHeaderBytes"/>. This is the entire
+        /// mechanism behind changing a container's password, keyfiles, PIM, and/or hash algorithm:
+        /// the master/secondary key and every other header field live unchanged inside that
+        /// plaintext, so re-encrypting it under a freshly derived key - with a fresh salt, since
+        /// reusing the old one would make the old and new ciphertexts trivially related - is the
+        /// whole operation. See <see cref="VeraCryptContainer.ChangePasswordAsync"/>.
+        /// </summary>
+        /// <param name="decryptedHeaderBytes">
+        /// The existing header's full decrypted body (<see cref="VeraCryptHeader.DecryptedBytes"/>),
+        /// obtained by successfully parsing it with the OLD credentials first - this method has no
+        /// way to verify that on its own, since it never decrypts anything itself.
+        /// </param>
+        /// <param name="algorithm">
+        /// The encryption algorithm to re-encrypt with - the same one the header was already
+        /// encrypted with; this cannot change independently of the header's own plaintext content.
+        /// </param>
+        /// <param name="hashAlgorithm">The hash algorithm to derive the new header key with.</param>
+        /// <param name="password">The new password.</param>
+        /// <param name="pim">The new PIM, or 0 for the default.</param>
+        /// <param name="keyFiles">The new keyfiles, in order, or null for none.</param>
+        /// <param name="cancellationToken">A token to cancel the operation.</param>
+        internal static Task<byte[]> BuildHeaderRegionAsync(
+            byte[] decryptedHeaderBytes, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm,
+            string password, int pim, IEnumerable<FileInfo> keyFiles, CancellationToken cancellationToken)
+        {
+            if (decryptedHeaderBytes == null)
+            {
+                throw new ArgumentNullException(nameof(decryptedHeaderBytes));
+            }
+            if (decryptedHeaderBytes.Length != EncryptedHeaderSize)
+            {
+                throw new ArgumentException($"Decrypted header must be exactly {EncryptedHeaderSize} bytes.", nameof(decryptedHeaderBytes));
+            }
+            if (password == null)
+            {
+                throw new ArgumentNullException(nameof(password));
+            }
+            if (pim < 0)
+            {
+                throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
+            }
+
+            var passwordBytes = KeyfileMixer.Apply(Encoding.UTF8.GetBytes(password), keyFiles);
+            return BuildHeaderRegionCoreAsync(decryptedHeaderBytes, algorithm, hashAlgorithm, passwordBytes, pim, cancellationToken);
+        }
+
+        private static Task<byte[]> BuildHeaderRegionCoreAsync(
+            byte[] decryptedHeaderBytes, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm,
+            byte[] passwordBytes, int pim, CancellationToken cancellationToken)
+        {
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // A fresh salt per region (primary and backup each get their own, independent call
+                // to this method - see ChangePasswordAsync) - System.Security.Cryptography.RandomNumberGenerator,
+                // not System.Random, since this is genuinely security-sensitive: it feeds directly
+                // into the key that will protect the header going forward.
+                var salt = new byte[SaltSize];
+                using (var rng = RandomNumberGenerator.Create())
+                {
+                    rng.GetBytes(salt);
+                }
+
+                var componentCount = CascadeDefinitions.GetComponentCount(algorithm);
+                var keyStream = DeriveHeaderKey(passwordBytes, salt, hashAlgorithm, componentCount, pim);
+                var (headerCipherKey, headerTweakKey) = SliceKeyMaterial(keyStream, componentCount);
+
+                var encryptedHeader = XtsCipherSelector.Encrypt(algorithm, decryptedHeaderBytes, headerCipherKey, headerTweakKey, dataUnitNumber: 0);
+
+                var region = new byte[HeaderRegionSize];
+                Buffer.BlockCopy(salt, 0, region, 0, SaltSize);
+                Buffer.BlockCopy(encryptedHeader, 0, region, SaltSize, EncryptedHeaderSize);
+                return region;
+            }, cancellationToken);
+        }
+
         private static Task<VeraCryptHeader> TryDecryptAndValidateAsync(byte[] region, byte[] passwordBytes, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, bool fromBackup, int pim, CancellationToken cancellationToken)
         {
             return Task.Run(() =>
@@ -422,7 +525,8 @@ namespace uk.andyjohnson.Asiri.Core
                 MasterKey = masterKey,
                 SecondaryKey = secondaryKey,
                 CrcValid = crcValid,
-                FromBackup = fromBackup
+                FromBackup = fromBackup,
+                DecryptedBytes = d
             };
         }
 

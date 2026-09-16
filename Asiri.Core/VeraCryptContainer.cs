@@ -355,6 +355,177 @@ namespace uk.andyjohnson.Asiri.Core
         }
 
         /// <summary>
+        /// Changes a container's password, keyfiles, PIM, and/or hash algorithm, without touching
+        /// its contents. Verified against VeraCrypt's own source (Common/Password.c's
+        /// <c>ChangePwd</c>), not just its documentation: the volume's master and secondary keys -
+        /// the only things that actually protect its data - are never changed by this operation,
+        /// only the header's own encryption key (re-derived from the new credentials with a fresh
+        /// random salt) is. Static, and does not require the container to already be open: this
+        /// never touches the filesystem region at all, so mounting one first via
+        /// <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/>
+        /// would be pure wasted work.
+        /// </summary>
+        /// <remarks>
+        /// Rewrites the primary header first, then the backup header, each with its own independent
+        /// fresh salt (matching VeraCrypt's own behaviour - it does not write the same bytes to both
+        /// locations). If the process is interrupted between the two writes, the container is still
+        /// openable - with the *old* credentials, via the automatic backup-header fallback
+        /// <see cref="HeaderParser.ParseAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, int, IEnumerable{FileInfo}, CancellationToken)"/>
+        /// already provides - since the backup hasn't been touched yet. That's an inherent property
+        /// of VeraCrypt's fixed two-copies format, not something this method can improve on while
+        /// staying format-compatible; if the backup write itself fails, the resulting exception says
+        /// so explicitly, since at that point the primary has already changed but the backup hasn't.
+        ///
+        /// Both new header regions are self-verified before either is written: decrypted and
+        /// validated with the new credentials, and checked to still carry the exact same
+        /// master/secondary key as the original, entirely in memory. VeraCrypt's own C implementation
+        /// doesn't need this (it's mature, long-tested code); this one is new, so the extra check
+        /// costs little and catches a bug in this method itself before it can ever reach disk.
+        ///
+        /// Unlike real VeraCrypt, this does not perform its optional multi-pass anti-forensic
+        /// overwrite of the old header location (each pass a genuinely valid header, just with a
+        /// different random salt, intended to make recovering the old header via magnetic/flash
+        /// remanence harder) - a deliberate scope decision, not an oversight: it is a defense-in-depth
+        /// measure, not required for correctness.
+        /// </remarks>
+        /// <param name="path">Path to the VeraCrypt container file.</param>
+        /// <param name="oldPassword">The container's current password.</param>
+        /// <param name="algorithm">
+        /// The container's encryption algorithm. Unlike every other credential here, this cannot
+        /// change: VeraCrypt itself never lets a password/keyfile change also change the cipher,
+        /// since that would require re-encrypting the entire data area, not just the header.
+        /// </param>
+        /// <param name="oldHashAlgorithm">The current hash algorithm used to derive keys from the password.</param>
+        /// <param name="oldPim">The container's current PIM, or 0 if it uses the default.</param>
+        /// <param name="oldKeyFiles">The container's current keyfiles, in order, or null for none.</param>
+        /// <param name="newPassword">The new password.</param>
+        /// <param name="newPim">
+        /// The new PIM, or 0 for the default - not "keep the old one": VeraCrypt itself always
+        /// requires this to be stated explicitly for the new credentials, the same way
+        /// <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/>'s
+        /// own <c>pim</c> parameter does.
+        /// </param>
+        /// <param name="newKeyFiles">The new keyfiles, in order, or null for none.</param>
+        /// <param name="newHashAlgorithm">
+        /// The new hash algorithm, or null - the default - to keep <paramref name="oldHashAlgorithm"/>
+        /// unchanged. VeraCrypt itself allows the hash algorithm to change independently of the
+        /// password.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// A token to cancel the operation. Honoured up until the point the first byte is written to
+        /// disk; not checked again between the primary and backup writes, to keep that already-inherent
+        /// window as short as possible rather than artificially widening it.
+        /// </param>
+        public static async Task ChangePasswordAsync(
+            FileInfo path,
+            string oldPassword, CryptoAlgorithm algorithm, HashAlgorithm oldHashAlgorithm, int oldPim, IEnumerable<FileInfo> oldKeyFiles,
+            string newPassword, int newPim, IEnumerable<FileInfo> newKeyFiles, HashAlgorithm? newHashAlgorithm = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (path == null)
+            {
+                throw new ArgumentNullException(nameof(path));
+            }
+            if (oldPassword == null)
+            {
+                throw new ArgumentNullException(nameof(oldPassword));
+            }
+            if (newPassword == null)
+            {
+                throw new ArgumentNullException(nameof(newPassword));
+            }
+            if (!CascadeDefinitions.IsSupported(algorithm))
+            {
+                throw new ArgumentException($"Unsupported encryption algorithm: {algorithm}.", nameof(algorithm));
+            }
+            if (!SupportedHashAlgorithms.Contains(oldHashAlgorithm))
+            {
+                throw new ArgumentException($"Unsupported hash algorithm: {oldHashAlgorithm}.", nameof(oldHashAlgorithm));
+            }
+            if (newHashAlgorithm.HasValue && !SupportedHashAlgorithms.Contains(newHashAlgorithm.Value))
+            {
+                throw new ArgumentException($"Unsupported hash algorithm: {newHashAlgorithm.Value}.", nameof(newHashAlgorithm));
+            }
+            if (oldPim < 0)
+            {
+                throw new ArgumentException($"PIM must not be negative: {oldPim}.", nameof(oldPim));
+            }
+            if (newPim < 0)
+            {
+                throw new ArgumentException($"PIM must not be negative: {newPim}.", nameof(newPim));
+            }
+
+            var effectiveNewHashAlgorithm = newHashAlgorithm ?? oldHashAlgorithm;
+
+            // Reading and validating the OLD header, with the OLD credentials, is both how we obtain
+            // the master/secondary key and the ONLY proof that the caller actually knows the current
+            // credentials - never skip or weaken this to get here faster.
+            var oldHeader = await HeaderParser.ParseAsync(path, oldPassword, algorithm, oldHashAlgorithm, oldPim, oldKeyFiles, cancellationToken).ConfigureAwait(false);
+
+            var newPrimaryRegion = await HeaderParser.BuildHeaderRegionAsync(
+                oldHeader.DecryptedBytes, algorithm, effectiveNewHashAlgorithm, newPassword, newPim, newKeyFiles, cancellationToken).ConfigureAwait(false);
+            await SelfVerifyAsync(oldHeader, newPrimaryRegion, algorithm, effectiveNewHashAlgorithm, newPassword, newPim, newKeyFiles, fromBackup: false, cancellationToken).ConfigureAwait(false);
+
+            var newBackupRegion = await HeaderParser.BuildHeaderRegionAsync(
+                oldHeader.DecryptedBytes, algorithm, effectiveNewHashAlgorithm, newPassword, newPim, newKeyFiles, cancellationToken).ConfigureAwait(false);
+            await SelfVerifyAsync(oldHeader, newBackupRegion, algorithm, effectiveNewHashAlgorithm, newPassword, newPim, newKeyFiles, fromBackup: true, cancellationToken).ConfigureAwait(false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            Stream fileStream;
+            try
+            {
+                fileStream = path.Open(FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (Exception ex) when (!(ex is ArgumentException || ex is ArgumentNullException))
+            {
+                throw new InvalidOperationException($"Unable to open container file for writing: {path.FullName}", ex);
+            }
+
+            using (fileStream)
+            {
+                // Primary first, then backup: if this is interrupted in between, the container is
+                // still openable with the OLD credentials via automatic backup-header fallback, since
+                // the backup hasn't been touched yet. CancellationToken.None from here on - see the
+                // remarks on honouring cancellation only up to this point.
+                await HeaderParser.WriteRegionAsync(fileStream, 0, newPrimaryRegion, CancellationToken.None).ConfigureAwait(false);
+                fileStream.Flush();
+
+                var backupOffset = fileStream.Length - HeaderParser.BackupHeaderOffsetFromEnd;
+                try
+                {
+                    await HeaderParser.WriteRegionAsync(fileStream, backupOffset, newBackupRegion, CancellationToken.None).ConfigureAwait(false);
+                    fileStream.Flush();
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        "The primary header was rewritten with the new credentials, but writing the backup " +
+                        "header failed. The container is still fully openable with the NEW credentials (the " +
+                        "primary header succeeded); the backup header still reflects the OLD credentials " +
+                        "until this is retried.", ex);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Confirms a newly built header region actually decrypts back to a valid header, with the
+        /// new credentials, that carries the exact same master and secondary key as the original -
+        /// entirely in memory, before <see cref="ChangePasswordAsync"/> writes anything to disk.
+        /// </summary>
+        private static async Task SelfVerifyAsync(
+            VeraCryptHeader oldHeader, byte[] newRegion, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm,
+            string password, int pim, IEnumerable<FileInfo> keyFiles, bool fromBackup, CancellationToken cancellationToken)
+        {
+            var verified = await HeaderParser.TryDecryptRegionAsync(newRegion, password, algorithm, hashAlgorithm, fromBackup, pim, keyFiles, cancellationToken).ConfigureAwait(false);
+            if (verified == null || !verified.MasterKey.SequenceEqual(oldHeader.MasterKey) || !verified.SecondaryKey.SequenceEqual(oldHeader.SecondaryKey))
+            {
+                throw new InvalidOperationException(
+                    "Internal error: the newly built header region failed to self-verify. Nothing has been written to the container file.");
+            }
+        }
+
+        /// <summary>
         /// Searches every (<see cref="CryptoAlgorithm"/>, <see cref="HashAlgorithm"/>) combination
         /// against the container's primary header region, falling back to the backup region if none
         /// match, reading each region from disk only once regardless of how many combinations are

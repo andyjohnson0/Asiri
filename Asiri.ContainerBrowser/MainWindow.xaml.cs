@@ -111,6 +111,72 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             Close();
         }
 
+        /// <summary>
+        /// Changes a container's password, keyfiles, PIM, and/or hash algorithm via
+        /// <see cref="VeraCryptContainer.ChangePasswordAsync"/> - a standalone operation on the file
+        /// the user picks, not on whatever container (if any) is currently open in this window: that
+        /// method is static and never touches the filesystem region, so it never needs one open. If
+        /// the same file IS currently open elsewhere, the attempt fails cleanly with a sharing
+        /// violation (wrapped in a descriptive message by ChangePasswordAsync itself) rather than
+        /// this window pre-emptively guessing whether that's the case.
+        /// </summary>
+        private async void ChangePasswordMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            var openDialog = new OpenFileDialog
+            {
+                Title = "Change Container Password",
+                Filter = "VeraCrypt containers (*.hc)|*.hc|All files (*.*)|*.*"
+            };
+            if (openDialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+
+            // requireAlgorithmAndHash: true - ChangePasswordAsync has no auto-detecting overload, so
+            // both must be known and explicitly chosen here, unlike the ordinary Open flow.
+            var oldCredentialsDialog = new CredentialsDialog(requireAlgorithmAndHash: true) { Owner = this };
+            if (oldCredentialsDialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            var newCredentialsDialog = new NewPasswordDialog { Owner = this };
+            if (newCredentialsDialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            using var cancellationTokenSource = new CancellationTokenSource();
+            var progressDialog = new ProgressDialog(cancellationTokenSource, "Changing password...") { Owner = this };
+            progressDialog.Show();
+            IsEnabled = false;
+
+            try
+            {
+                await VeraCryptContainer.ChangePasswordAsync(
+                    new FileInfo(openDialog.FileName),
+                    oldCredentialsDialog.Password, oldCredentialsDialog.Algorithm!.Value, oldCredentialsDialog.HashAlgorithm!.Value,
+                    oldCredentialsDialog.Pim, oldCredentialsDialog.KeyFiles,
+                    newCredentialsDialog.NewPassword, newCredentialsDialog.NewPim, newCredentialsDialog.NewKeyFiles, newCredentialsDialog.NewHashAlgorithm,
+                    cancellationTokenSource.Token);
+
+                MessageBox.Show(this, "The container's password has been changed.", "Change Password", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (OperationCanceledException)
+            {
+                StatusText.Text = "Change password cancelled.";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Unable to change password", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                IsEnabled = true;
+                progressDialog.Close();
+            }
+        }
+
         private void WritingEnabledMenuItem_Click(object sender, RoutedEventArgs e)
         {
             try

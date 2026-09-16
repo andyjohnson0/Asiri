@@ -12,7 +12,16 @@ This document takes precedence over all other instructions for the Asiri.Core pr
   `VeraCryptContainer.ContainerAccessMode` (an open-time ceiling) and `VeraCryptContainer.IsWritable`
   (a separate, explicit runtime arm/disarm switch, off by default even when opened for read-write) -
   both must be set before any write is permitted. Limited to fixed-size containers: do not implement
-  growing or shrinking a container's size, or changing its password or keyfiles.
+  growing or shrinking a container's size.
+- Implement changing a container's password, keyfiles, PIM, and/or hash algorithm
+  (`VeraCryptContainer.ChangePasswordAsync`), verified against VeraCrypt's own source
+  (Common/Password.c's `ChangePwd`): the master and secondary keys are never changed, only the
+  header's own encryption key (re-derived with a fresh random salt) is, and both the primary and
+  backup header are rewritten, each with its own independent salt. Static - does not require the
+  container to already be open, since this never reaches the filesystem region. The encryption
+  algorithm cannot change this way. Two scope reductions relative to real VeraCrypt, both deliberate:
+  no multi-pass anti-forensic overwrite of the old header location, and no preservation of the
+  container file's own timestamps.
 - Do not implement support for encrypted partitions or drives.
 - Do not implement hidden volumes.
 - Implement AES, Serpent, Twofish, and Camellia.
