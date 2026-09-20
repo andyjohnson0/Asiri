@@ -56,7 +56,7 @@ has not been separately verified this way — the caution above still applies to
 
 ## Status
 
-Pre-release, version `0.2.0`. The public API may still change.
+Pre-release, version `0.3.0`. The public API may still change.
 
 ## What's supported
 
@@ -176,6 +176,45 @@ var container = await VeraCryptContainer.OpenAsync(
 `OpenOptions` also carries the PIM, keyfiles, and access mode - see below. Every I/O method is
 `CancellationToken`-aware.
 
+## Creating a container
+
+**⚠️ Container creation is pre-release. A container created this way has been confirmed to mount
+and have its filesystem recognised by a real, running VeraCrypt — but only in one manual check, not
+yet the exhaustive automated coverage read access has. See the caution earlier in this README.**
+
+`CreateAsync` formats a brand new container file — fixed by `size`, its encryption algorithm, hash
+algorithm, and filesystem type — and returns it already open, writable by default:
+
+```csharp
+using System.IO;
+using uk.andyjohnson.Asiri.Core;
+
+var container = await VeraCryptContainer.CreateAsync(
+    new FileInfo(@"C:\path\to\new-container.hc"),
+    size: 64L * 1024 * 1024,
+    password: "correct horse battery staple",
+    CryptoAlgorithm.Aes,
+    HashAlgorithm.Sha512,
+    FileSystemType.Ntfs);
+
+try
+{
+    // The new container is writable immediately - no separate step required.
+    IFile file = await container.Root.CreateFileAsync("notes.txt");
+}
+finally
+{
+    container.Close();
+}
+```
+
+`size` is the container's total file size, not the filesystem's — VeraCrypt reserves a fixed 256 KiB
+for headers, and the filesystem gets whatever remains. `CreateOptions` carries the PIM, keyfiles, a
+volume label, a cluster size (exFAT only), the access mode to open the new container with
+(`ReadWrite` by default, unlike `OpenAsync`), and an `Overwrite` flag to replace an existing file at
+the target path rather than reject the request. Only fixed-size containers are supported — Asiri
+cannot grow or shrink one after creation.
+
 ## Writing to a container
 
 **⚠️ Back up the container file before running this. Write access is pre-release and has not been
@@ -260,6 +299,7 @@ own behaviour: changing it would mean re-encrypting the entire data area, not ju
 | [`Asiri.Core`](Asiri.Core) | The library itself: VeraCrypt header parsing (`HeaderParser`), sector-level encryption and decryption (`SectorDecryptor`, `DecryptedBlockDeviceStream`), the cipher and hash implementations (under `Crypto/`), the DiscUtils-backed filesystem adapters (under `Filesystem/`), and the public entry point, `VeraCryptContainer`. |
 | [`Asiri.Core.Tests`](Asiri.Core.Tests) | xUnit tests, run against real VeraCrypt container files checked into `Asiri.Core.Tests/Test Data` — covering every supported cipher/cascade, hash, filesystem, PIM, and keyfile combination — as well as synthetic, from-scratch header tests independent of the library's own crypto code, read-write tests covering create/delete/rename/move/attributes/timestamps across all three filesystems, and password/keyfile-change tests. |
 | [`Asiri.ContainerBrowser`](Asiri.ContainerBrowser) | A small WPF reference application: open a container read-only or with write access, browse and edit its folder tree (create/rename/move/delete, drag-and-drop import/export), change its password, keyfiles, PIM, or hash algorithm, and view text files, images, or a hex dump of anything else. Demonstrates `Asiri.Core` as a consumer would use it. |
+| [`Asiri.Diagnostics`](Asiri.Diagnostics) | A standalone command-line tool, not part of the library or its public API: compares what `Asiri.Core` decrypts from a container's data area against what a real, already-mounted VeraCrypt exposes for the same container, to isolate whether a filesystem-recognition failure is a decryption mismatch or something downstream of decryption. |
 
 Each project has its own `AGENT.md` describing the scope and conventions the agent worked to.
 

@@ -6,12 +6,16 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>uk.andyjohnson.Asiri.Diagnostics</RootNamespace>
+    <Version>0.3.0</Version>
+    <Authors>Andrew Johnson</Authors>
     <Description>
       Standalone diagnostic tool: not part of the Asiri library or its public API. Compares what
       Asiri.Core decrypts from a container's data area against what a real, already-mounted
       VeraCrypt exposes for the same container, to determine whether a "VeraCrypt mounts it but
       Windows won't read it" failure is a decryption mismatch or something downstream of decryption.
     </Description>
+    <RepositoryUrl>https://github.com/andyjohnson0/Asiri</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 
   <ItemGroup>

@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <RootNamespace>uk.andyjohnson.Asiri.ContainerBrowser</RootNamespace>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <Authors>Andrew Johnson</Authors>
     <Description>WPF reference application for browsing VeraCrypt encrypted file containers using Asiri.Core.</Description>
     <RepositoryUrl>https://github.com/andyjohnson0/Asiri</RepositoryUrl>
