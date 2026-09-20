@@ -100,33 +100,152 @@ namespace uk.andyjohnson.Asiri.Core
     }
 
     /// <summary>
-    /// The most permissive access to request when opening a VeraCrypt container - the ceiling for
-    /// that session, not a live switch. See <see cref="VeraCryptContainer.IsWritable"/> for the
-    /// separate, additional step actually required before any write is permitted even when
-    /// <see cref="ReadWrite"/> is requested here.
+    /// The access to request when opening or creating a VeraCrypt container - fixed for that
+    /// session; see <see cref="VeraCryptContainer.AccessMode"/>, the read-only view of this exposed
+    /// once a container is open.
     /// </summary>
     public enum ContainerAccessMode
     {
         /// <summary>
-        /// The container can only be read. Opening with this mode - the default - can never be
-        /// upgraded to <see cref="ReadWrite"/> later without closing and reopening the container.
+        /// The container can only be read. Opening with this mode - the default for
+        /// <c>OpenAsync</c> - can never be upgraded to <see cref="ReadWrite"/> later without closing
+        /// and reopening the container.
         /// </summary>
         ReadOnly,
 
         /// <summary>
         /// The container's underlying file is opened for writing, and exclusively (no other process,
-        /// or other Asiri container, can have it open at the same time) - but nothing can actually be
-        /// written until <see cref="VeraCryptContainer.IsWritable"/> is also explicitly set to true.
+        /// or other Asiri container, can have it open at the same time), and every mutating
+        /// operation on it is permitted.
         /// </summary>
         ReadWrite
     }
 
     /// <summary>
-    /// The output format for <see cref="VeraCryptContainer.DumpRawImageAsync"/> - a diagnostic export
+    /// Everything about opening a container besides its path and password (see
+    /// <see cref="VeraCryptContainer.OpenAsync"/>), each defaulting to the same behaviour as if it
+    /// had been omitted entirely - a caller only ever needs to set the ones that differ from that.
+    /// </summary>
+    public sealed class OpenOptions
+    {
+        /// <summary>
+        /// The container's PIM (Personal Iterations Multiplier), or 0 - the default - if none was
+        /// set when the container was created. VeraCrypt does not store the PIM in the header, so it
+        /// must be supplied here, the same way the password is.
+        /// </summary>
+        public int Pim { get; set; } = 0;
+
+        /// <summary>
+        /// Keyfiles to mix into the password, in order, or null - the default - for none. VeraCrypt
+        /// does not store keyfiles in the header, so, like the password and PIM, they must be
+        /// supplied here.
+        /// </summary>
+        public IEnumerable<FileInfo> KeyFiles { get; set; }
+
+        /// <summary>
+        /// The container's encryption algorithm, if already known, or null - the default - to search
+        /// every supported <see cref="CryptoAlgorithm"/>. Supplying this when known turns what would
+        /// be up to 4 PBKDF2 derivations (one per hash algorithm still being searched) into exactly 1.
+        /// </summary>
+        public CryptoAlgorithm? Algorithm { get; set; }
+
+        /// <summary>
+        /// The container's hash algorithm, if already known, or null - the default - to search every
+        /// supported <see cref="HashAlgorithm"/>. Supplying this when known skips the (up to 3) other
+        /// hash algorithms' derivations entirely, rather than only trying them after this one fails.
+        /// </summary>
+        public HashAlgorithm? HashAlgorithm { get; set; }
+
+        /// <summary>
+        /// The access to open the container's underlying file with, or
+        /// <see cref="ContainerAccessMode.ReadOnly"/> - the default - for read-only. Opening with
+        /// <see cref="ContainerAccessMode.ReadWrite"/> permits every mutating operation for the whole
+        /// session and takes an exclusive lock on the file, so only request it when you actually
+        /// intend to write during this session, not defensively "just in case".
+        /// </summary>
+        public ContainerAccessMode AccessMode { get; set; } = ContainerAccessMode.ReadOnly;
+    }
+
+    /// <summary>
+    /// Everything about creating a container besides its path, size, password, encryption
+    /// algorithm, hash algorithm, and filesystem type (see
+    /// <see cref="VeraCryptContainer.CreateAsync"/>) - those six are always required, since creation
+    /// has no auto-detecting overload to fall back on; everything here defaults to the same
+    /// behaviour as if it had been omitted entirely.
+    /// </summary>
+    public sealed class CreateOptions
+    {
+        /// <summary>The container's PIM (Personal Iterations Multiplier), or 0 for the default.</summary>
+        public int Pim { get; set; } = 0;
+
+        /// <summary>Keyfiles to mix into the password, in order, or null - the default - for none.</summary>
+        public IEnumerable<FileInfo> KeyFiles { get; set; }
+
+        /// <summary>A volume label for the new filesystem, or null - the default - for none.</summary>
+        public string Label { get; set; }
+
+        /// <summary>
+        /// The filesystem's cluster size in bytes, or null - the default. Only meaningful for
+        /// <see cref="FileSystemType.ExFat"/>: verified against DiscUtils' own source, its NTFS and
+        /// FAT formatters give no way at all to override their own fixed (NTFS - always 4 KiB at this
+        /// library's fixed 512-byte sector size) or size-derived (FAT) cluster size, so a non-null
+        /// value here is rejected for either of those rather than silently ignored. When given, must
+        /// be a positive power of two. For exFAT, null uses a fixed 4 KiB - matching NTFS's own
+        /// cluster size, kept consistent across every filesystem type this method can produce - rather
+        /// than exFAT's own size-tiered default.
+        /// </summary>
+        public int? ClusterSize { get; set; }
+
+        /// <summary>
+        /// The access to open the newly created container's underlying file with, or
+        /// <see cref="ContainerAccessMode.ReadWrite"/> - the default, unlike <see cref="OpenOptions.AccessMode"/>'s
+        /// own default - since a container that was just created empty is, in every realistic case,
+        /// about to be populated immediately.
+        /// </summary>
+        public ContainerAccessMode AccessMode { get; set; } = ContainerAccessMode.ReadWrite;
+
+        /// <summary>
+        /// Whether to silently replace an existing file at the target path, rather than the default
+        /// behaviour of rejecting the request outright. Off by default: creation is a request for a
+        /// brand new container, not "create or replace", unless the caller explicitly says otherwise.
+        /// </summary>
+        public bool Overwrite { get; set; } = false;
+    }
+
+    /// <summary>
+    /// Everything about a credentials change besides the new password (see
+    /// <see cref="VeraCryptContainer.ChangeCredentialsAsync"/>), each defaulting to the same
+    /// behaviour as if it had been omitted entirely.
+    /// </summary>
+    public sealed class ChangeCredentialsOptions
+    {
+        /// <summary>
+        /// The new PIM, or 0 for the default - not "keep the current one": VeraCrypt itself always
+        /// requires this to be stated explicitly for new credentials, the same way
+        /// <see cref="OpenOptions.Pim"/> does when opening.
+        /// </summary>
+        public int NewPim { get; set; } = 0;
+
+        /// <summary>The new keyfiles, in order, or null - the default - for none.</summary>
+        public IEnumerable<FileInfo> NewKeyFiles { get; set; }
+
+        /// <summary>
+        /// The new hash algorithm, or null - the default - to keep the container's current
+        /// <see cref="VeraCryptContainer.HashAlgorithm"/> unchanged. VeraCrypt itself allows the hash
+        /// algorithm to change independently of the password. The encryption algorithm itself can
+        /// never change this way - VeraCrypt itself never lets a credentials change also change the
+        /// cipher, since that would require re-encrypting the entire data area, not just the header -
+        /// so there is no equivalent option for it here.
+        /// </summary>
+        public HashAlgorithm? NewHashAlgorithm { get; set; }
+    }
+
+    /// <summary>
+    /// The output format for <see cref="VeraCryptContainer.ExportFileSystemAsync"/> - a diagnostic export
     /// of a container's decrypted filesystem, for handing to a tool, person, or AI session entirely
     /// outside Asiri (see that method's own remarks for why).
     /// </summary>
-    public enum RawImageExportFormat
+    public enum FileSystemExportFormat
     {
         /// <summary>
         /// The whole decrypted filesystem, written as a bare sequence of bytes with no wrapper of any
@@ -168,8 +287,8 @@ namespace uk.andyjohnson.Asiri.Core
     /// </summary>
     /// <remarks>
     /// This code is pre-production: it has not undergone independent security review or a
-    /// cryptographic audit. Writing to a container - opting into <see cref="ContainerAccessMode.ReadWrite"/>
-    /// and then setting <see cref="IsWritable"/> - modifies the container file in place, with no
+    /// cryptographic audit. Writing to a container - opening or creating it with
+    /// <see cref="ContainerAccessMode.ReadWrite"/> - modifies the container file in place, with no
     /// undo. Only enable writing on a container you have a backup of.
     /// </remarks>
     public sealed class VeraCryptContainer
@@ -178,179 +297,59 @@ namespace uk.andyjohnson.Asiri.Core
         private readonly DiscFileSystem _fileSystem;
         private readonly ContainerLifetime _lifetime;
 
+        /// <summary>
+        /// The header this container was opened or created with, retained for
+        /// <see cref="ChangeCredentialsAsync"/>'s sake: its <see cref="VeraCryptHeader.DecryptedBytes"/>
+        /// is the plaintext that method re-encrypts under a new header key, and its
+        /// <see cref="VeraCryptHeader.MasterKey"/>/<see cref="VeraCryptHeader.SecondaryKey"/> are what
+        /// that method's own self-verification confirms a newly built region still carries unchanged.
+        /// </summary>
+        private readonly VeraCryptHeader _header;
+
         private VeraCryptContainer(
             DecryptedBlockDeviceStream stream, DiscFileSystem fileSystem, ContainerLifetime lifetime, IDirectory root,
-            CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, FileSystemType fileSystemType)
+            VeraCryptHeader header, FileSystemType fileSystemType)
         {
             _stream = stream;
             _fileSystem = fileSystem;
             _lifetime = lifetime;
             Root = root;
-            Algorithm = algorithm;
-            HashAlgorithm = hashAlgorithm;
+            _header = header;
+            Algorithm = header.Algorithm;
+            HashAlgorithm = header.HashAlgorithm;
             FileSystemType = fileSystemType;
         }
 
         /// <summary>
-        /// Opens a VeraCrypt container.
-        /// </summary>
-        /// <param name="path">Path to the VeraCrypt container file.</param>
-        /// <param name="password">The container password.</param>
-        /// <param name="algo">The encryption algorithm used by the container.</param>
-        /// <param name="hashAlgo">The hash algorithm used to derive keys from the password.</param>
-        /// <param name="fsType">The filesystem type used within the container.</param>
-        /// <param name="pim">
-        /// The container's PIM (Personal Iterations Multiplier), or 0 - the default - if none was
-        /// set when the container was created. VeraCrypt does not store the PIM in the header, so it
-        /// must be supplied here, the same way the password is.
-        /// </param>
-        /// <param name="keyFiles">
-        /// Keyfiles to mix into the password, in order, or null - the default - for none. VeraCrypt
-        /// does not store keyfiles in the header, so, like the password and PIM, they must be
-        /// supplied here.
-        /// </param>
-        /// <param name="accessMode">
-        /// The most permissive access to open the container's underlying file with, or
-        /// <see cref="ContainerAccessMode.ReadOnly"/> - the default - for read-only. Opening with
-        /// <see cref="ContainerAccessMode.ReadWrite"/> does not by itself permit any write - see
-        /// <see cref="IsWritable"/>, a separate, additional step - but it does take an exclusive lock
-        /// on the file for the whole session, so only request it when you actually intend to write
-        /// during this session, not defensively "just in case".
-        /// </param>
-        /// <param name="cancellationToken">A token to cancel the operation.</param>
-        /// <returns>A container whose <see cref="Root"/> exposes the decrypted filesystem.</returns>
-        public static async Task<VeraCryptContainer> OpenAsync(
-            FileInfo path,
-            string password,
-            CryptoAlgorithm algo,
-            HashAlgorithm hashAlgo,
-            FileSystemType fsType,
-            int pim = 0,
-            IEnumerable<FileInfo> keyFiles = null,
-            ContainerAccessMode accessMode = ContainerAccessMode.ReadOnly,
-            CancellationToken cancellationToken = default)
-        {
-            if (path == null)
-            {
-                throw new ArgumentNullException(nameof(path));
-            }
-            if (password == null)
-            {
-                throw new ArgumentNullException(nameof(password));
-            }
-            if (!CascadeDefinitions.IsSupported(algo))
-            {
-                throw new ArgumentException($"Unsupported encryption algorithm: {algo}.", nameof(algo));
-            }
-
-            switch (hashAlgo)
-            {
-                case HashAlgorithm.Sha512:
-                case HashAlgorithm.Sha256:
-                case HashAlgorithm.Whirlpool:
-                case HashAlgorithm.Blake2s256:
-                    break;
-                default:
-                    throw new ArgumentException($"Unsupported hash algorithm: {hashAlgo}.", nameof(hashAlgo));
-            }
-
-            switch (fsType)
-            {
-                case FileSystemType.Ntfs:
-                case FileSystemType.Fat:
-                case FileSystemType.ExFat:
-                    break;
-                default:
-                    throw new ArgumentException($"Unsupported filesystem type: {fsType}.", nameof(fsType));
-            }
-            if (pim < 0)
-            {
-                throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
-            }
-
-            var canWrite = accessMode == ContainerAccessMode.ReadWrite;
-            var header = await HeaderParser.ParseAsync(path, password, algo, hashAlgo, pim, keyFiles, cancellationToken).ConfigureAwait(false);
-            var decryptor = await SectorDecryptor.CreateAsync(path, header, canWrite, cancellationToken).ConfigureAwait(false);
-            var stream = new DecryptedBlockDeviceStream(decryptor);
-
-            try
-            {
-                var lifetime = new ContainerLifetime { MaxAccessMode = accessMode };
-                var (fileSystem, root) = await OpenFileSystemAsync(fsType, stream, lifetime, cancellationToken).ConfigureAwait(false);
-                return new VeraCryptContainer(stream, fileSystem, lifetime, root, algo, hashAlgo, fsType);
-            }
-            catch
-            {
-                // Covers both genuine filesystem-open failures and cancellation firing after the
-                // stream/decryptor were created but before a filesystem was successfully opened -
-                // stream.Dispose() is idempotent (via SectorDecryptor's own disposed-tracking), so
-                // this is safe even if the failing step already cleaned up after itself.
-                stream.Dispose();
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Opens a VeraCrypt container without knowing its encryption algorithm, hash algorithm, or
-        /// filesystem type in advance - only the password is required, matching how VeraCrypt itself
-        /// mounts a volume. Either or both of <paramref name="algo"/> and <paramref name="hashAlgo"/>
-        /// can be supplied if already known, narrowing or eliminating the search accordingly.
+        /// Opens a VeraCrypt container. Only the password is required, matching how VeraCrypt itself
+        /// mounts a volume - the encryption and hash algorithms are auto-detected unless given via
+        /// <paramref name="options"/>, and the filesystem type is always detected directly from the
+        /// decrypted volume's boot sector, never a caller choice, since there is no search cost on
+        /// that axis to eliminate.
         /// </summary>
         /// <remarks>
         /// An unspecified (algorithm, hash) combination cannot be known in advance: the only way to
         /// tell whether a combination is correct is to derive keys with it and check whether the
         /// header's CRC validates, so that pairing must genuinely be searched to whatever extent
-        /// isn't already pinned down by <paramref name="algo"/>/<paramref name="hashAlgo"/>. This
-        /// searches over <see cref="HeaderParser.TrySearchHashAlgorithmAsync"/> rather than looping
+        /// isn't already pinned down by <see cref="OpenOptions.Algorithm"/>/
+        /// <see cref="OpenOptions.HashAlgorithm"/>. This searches over
+        /// <see cref="HeaderParser.TrySearchHashAlgorithmAsync"/> rather than looping
         /// <see cref="HeaderParser.ParseAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, int, IEnumerable{FileInfo}, CancellationToken)"/>
         /// directly, so the header regions are read from disk once and each combination is tried
         /// against the same bytes, rather than re-opening and re-reading the file per attempt.
-        ///
-        /// The filesystem type, by contrast, is never searched for, known or not: once the header
-        /// decrypts correctly, the volume's boot sector can be read directly and its OEM ID signature
-        /// inspected to determine NTFS, exFAT, or (by elimination) FAT - see
-        /// <see cref="DetectFileSystemTypeAsync"/>. There is no equivalent "I already know the
-        /// filesystem type" parameter here for that reason: there is no search cost on that axis to
-        /// eliminate.
         /// </remarks>
         /// <param name="path">Path to the VeraCrypt container file.</param>
         /// <param name="password">The container password.</param>
-        /// <param name="pim">
-        /// The container's PIM (Personal Iterations Multiplier), or 0 - the default - if none was
-        /// set when the container was created. Unlike the encryption and hash algorithms, this is
-        /// never searched for - VeraCrypt does not store the PIM in the header, so, exactly like the
-        /// password, it must already be known and supplied by the caller. The same value is used for
-        /// every (algorithm, hash) combination the search tries.
-        /// </param>
-        /// <param name="keyFiles">
-        /// Keyfiles to mix into the password, in order, or null - the default - for none. Like PIM,
-        /// this is never searched for - the same keyfiles are used for every (algorithm, hash)
-        /// combination the search tries.
-        /// </param>
-        /// <param name="algo">
-        /// The container's encryption algorithm, if already known, or null - the default - to search
-        /// every supported <see cref="CryptoAlgorithm"/>. Supplying this when known turns what would
-        /// be up to 4 PBKDF2 derivations (one per hash algorithm still being searched) into exactly 1.
-        /// </param>
-        /// <param name="hashAlgo">
-        /// The container's hash algorithm, if already known, or null - the default - to search every
-        /// supported <see cref="HashAlgorithm"/>. Supplying this when known skips the (up to 3) other
-        /// hash algorithms' derivations entirely, rather than only trying them after this one fails.
-        /// </param>
-        /// <param name="accessMode">
-        /// The most permissive access to open the container's underlying file with - see the
-        /// explicit-parameters overload's own remarks on this parameter.
+        /// <param name="options">
+        /// Everything about opening this container besides its path and password, or null to accept
+        /// every default - see <see cref="OpenOptions"/>.
         /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         /// <returns>A container whose <see cref="Root"/> exposes the decrypted filesystem.</returns>
         public static async Task<VeraCryptContainer> OpenAsync(
             FileInfo path,
             string password,
-            int pim = 0,
-            IEnumerable<FileInfo> keyFiles = null,
-            CryptoAlgorithm? algo = null,
-            HashAlgorithm? hashAlgo = null,
-            ContainerAccessMode accessMode = ContainerAccessMode.ReadOnly,
+            OpenOptions options = null,
             CancellationToken cancellationToken = default)
         {
             if (path == null)
@@ -361,20 +360,22 @@ namespace uk.andyjohnson.Asiri.Core
             {
                 throw new ArgumentNullException(nameof(password));
             }
-            if (pim < 0)
+
+            options = options ?? new OpenOptions();
+            if (options.Pim < 0)
             {
-                throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
+                throw new ArgumentException($"PIM must not be negative: {options.Pim}.", nameof(options));
             }
-            if (algo.HasValue && !CascadeDefinitions.IsSupported(algo.Value))
+            if (options.Algorithm.HasValue && !CascadeDefinitions.IsSupported(options.Algorithm.Value))
             {
-                throw new ArgumentException($"Unsupported encryption algorithm: {algo.Value}.", nameof(algo));
+                throw new ArgumentException($"Unsupported encryption algorithm: {options.Algorithm.Value}.", nameof(options));
             }
-            if (hashAlgo.HasValue && !SupportedHashAlgorithms.Contains(hashAlgo.Value))
+            if (options.HashAlgorithm.HasValue && !SupportedHashAlgorithms.Contains(options.HashAlgorithm.Value))
             {
-                throw new ArgumentException($"Unsupported hash algorithm: {hashAlgo.Value}.", nameof(hashAlgo));
+                throw new ArgumentException($"Unsupported hash algorithm: {options.HashAlgorithm.Value}.", nameof(options));
             }
 
-            var header = await DetectHeaderAsync(path, password, pim, keyFiles, algo, hashAlgo, cancellationToken).ConfigureAwait(false);
+            var header = await DetectHeaderAsync(path, password, options.Pim, options.KeyFiles, options.Algorithm, options.HashAlgorithm, cancellationToken).ConfigureAwait(false);
             if (header == null)
             {
                 throw new InvalidOperationException(
@@ -382,19 +383,23 @@ namespace uk.andyjohnson.Asiri.Core
                     "The password may be incorrect, or the container may not be a valid VeraCrypt volume.");
             }
 
-            var canWrite = accessMode == ContainerAccessMode.ReadWrite;
+            var canWrite = options.AccessMode == ContainerAccessMode.ReadWrite;
             var decryptor = await SectorDecryptor.CreateAsync(path, header, canWrite, cancellationToken).ConfigureAwait(false);
             var stream = new DecryptedBlockDeviceStream(decryptor);
 
             try
             {
                 var fsType = await DetectFileSystemTypeAsync(decryptor, cancellationToken).ConfigureAwait(false);
-                var lifetime = new ContainerLifetime { MaxAccessMode = accessMode };
+                var lifetime = new ContainerLifetime(options.AccessMode);
                 var (fileSystem, root) = await OpenFileSystemAsync(fsType, stream, lifetime, cancellationToken).ConfigureAwait(false);
-                return new VeraCryptContainer(stream, fileSystem, lifetime, root, header.Algorithm, header.HashAlgorithm, fsType);
+                return new VeraCryptContainer(stream, fileSystem, lifetime, root, header, fsType);
             }
             catch
             {
+                // Covers both genuine filesystem-open failures and cancellation firing after the
+                // stream/decryptor were created but before a filesystem was successfully opened -
+                // stream.Dispose() is idempotent (via SectorDecryptor's own disposed-tracking), so
+                // this is safe even if the failing step already cleaned up after itself.
                 stream.Dispose();
                 throw;
             }
@@ -424,35 +429,26 @@ namespace uk.andyjohnson.Asiri.Core
         /// own, wrapped in a clearer message, rather than replicating VeraCrypt's own per-filesystem
         /// minimum-size table.
         ///
-        /// Returns an already-open container, but - exactly like
-        /// <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/> -
-        /// not yet writable: <see cref="IsWritable"/> must still be explicitly set to true before
-        /// anything can be written to it, even though it was just created and starts out empty. This
-        /// keeps "was this container just created" and "am I currently allowed to write to it"
-        /// orthogonal, rather than special-casing creation.
+        /// Returns an already-open container, writable by default (see
+        /// <see cref="CreateOptions.AccessMode"/>) - there is no separate step required before
+        /// writing to it, even though it was just created and starts out empty.
         ///
         /// If any step fails after the container file has already been created on disk, that
         /// partially-written file is deleted, rather than left behind looking like a real container
         /// while actually being a corrupt, half-formed one.
         /// </remarks>
-        /// <param name="path">Path to the new container file. Must not already exist.</param>
+        /// <param name="path">
+        /// Path to the new container file. Must not already exist, unless
+        /// <see cref="CreateOptions.Overwrite"/> is set.
+        /// </param>
         /// <param name="size">The container's total file size, in bytes - see the remarks above.</param>
         /// <param name="password">The new container's password.</param>
         /// <param name="algorithm">The encryption algorithm to protect the container with.</param>
         /// <param name="hashAlgorithm">The hash algorithm to derive keys from the password with.</param>
         /// <param name="fileSystemType">The filesystem to format the container's data area with.</param>
-        /// <param name="pim">The container's PIM (Personal Iterations Multiplier), or 0 for the default.</param>
-        /// <param name="keyFiles">Keyfiles to mix into the password, in order, or null for none.</param>
-        /// <param name="label">A volume label for the new filesystem, or null - the default - for none.</param>
-        /// <param name="clusterSize">
-        /// The filesystem's cluster size in bytes, or null - the default. Only meaningful for
-        /// <see cref="FileSystemType.ExFat"/>: verified against DiscUtils' own source, its NTFS and
-        /// FAT formatters give no way at all to override their own fixed (NTFS - always 4 KiB at this
-        /// library's fixed 512-byte sector size) or size-derived (FAT) cluster size, so a non-null
-        /// value here is rejected for either of those rather than silently ignored. When given, must
-        /// be a positive power of two. For exFAT, null uses a fixed 4 KiB - matching NTFS's own
-        /// cluster size, kept consistent across every filesystem type this method can produce - rather
-        /// than exFAT's own size-tiered default (see <c>DefaultExFatClusterSize</c>).
+        /// <param name="options">
+        /// Everything about creating this container besides the six parameters above, or null to
+        /// accept every default - see <see cref="CreateOptions"/>.
         /// </param>
         /// <param name="cancellationToken">
         /// A token to cancel the operation. Honoured up until the container file is created on disk;
@@ -467,10 +463,7 @@ namespace uk.andyjohnson.Asiri.Core
             CryptoAlgorithm algorithm,
             HashAlgorithm hashAlgorithm,
             FileSystemType fileSystemType,
-            int pim = 0,
-            IEnumerable<FileInfo> keyFiles = null,
-            string label = null,
-            int? clusterSize = null,
+            CreateOptions options = null,
             CancellationToken cancellationToken = default)
         {
             if (path == null)
@@ -498,9 +491,11 @@ namespace uk.andyjohnson.Asiri.Core
                 default:
                     throw new ArgumentException($"Unsupported filesystem type: {fileSystemType}.", nameof(fileSystemType));
             }
-            if (pim < 0)
+
+            options = options ?? new CreateOptions();
+            if (options.Pim < 0)
             {
-                throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
+                throw new ArgumentException($"PIM must not be negative: {options.Pim}.", nameof(options));
             }
             if (size <= HeaderParser.TotalHeaderOverheadSize)
             {
@@ -508,51 +503,53 @@ namespace uk.andyjohnson.Asiri.Core
                     $"Size must be greater than {HeaderParser.TotalHeaderOverheadSize} bytes (VeraCrypt's fixed " +
                     "header overhead), plus whatever the chosen filesystem itself needs on top.", nameof(size));
             }
-            if (path.Exists)
+            if (!options.Overwrite && path.Exists)
             {
-                throw new ArgumentException($"A file already exists at this path: {path.FullName}.", nameof(path));
+                throw new ArgumentException(
+                    $"A file already exists at this path: {path.FullName}. Set {nameof(CreateOptions)}.{nameof(CreateOptions.Overwrite)} " +
+                    "to replace it instead.", nameof(path));
             }
-            if (clusterSize.HasValue)
+            if (options.ClusterSize.HasValue)
             {
                 if (fileSystemType != FileSystemType.ExFat)
                 {
                     throw new ArgumentException(
                         $"A specific cluster size can only be requested for exFAT; DiscUtils' {fileSystemType} " +
-                        "formatter provides no way to override its own cluster size.", nameof(clusterSize));
+                        "formatter provides no way to override its own cluster size.", nameof(options));
                 }
-                if (clusterSize.Value < DefaultSectorSize || (clusterSize.Value & (clusterSize.Value - 1)) != 0)
+                if (options.ClusterSize.Value < DefaultSectorSize || (options.ClusterSize.Value & (options.ClusterSize.Value - 1)) != 0)
                 {
                     throw new ArgumentException(
                         $"Cluster size must be a power of two of at least {DefaultSectorSize} bytes (this library's " +
-                        $"fixed sector size): {clusterSize.Value}.", nameof(clusterSize));
+                        $"fixed sector size): {options.ClusterSize.Value}.", nameof(options));
                 }
             }
 
-            return CreateAsyncCore(path, size, password, algorithm, hashAlgorithm, fileSystemType, pim, keyFiles, label, clusterSize, cancellationToken);
+            return CreateAsyncCore(path, size, password, algorithm, hashAlgorithm, fileSystemType, options, cancellationToken);
         }
 
         private static async Task<VeraCryptContainer> CreateAsyncCore(
             FileInfo path, long size, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm,
-            FileSystemType fileSystemType, int pim, IEnumerable<FileInfo> keyFiles, string label, int? clusterSize, CancellationToken cancellationToken)
+            FileSystemType fileSystemType, CreateOptions options, CancellationToken cancellationToken)
         {
             var dataAreaSize = size - HeaderParser.TotalHeaderOverheadSize;
 
             var (masterKey, secondaryKey) = HeaderParser.GenerateMasterKeys(algorithm);
             var plaintextHeader = HeaderParser.BuildNewHeaderPlaintext(dataAreaSize, DefaultSectorSize, masterKey, secondaryKey);
 
-            // Each header location gets its own independent salt, matching ChangePasswordAsync and,
+            // Each header location gets its own independent salt, matching ChangeCredentialsAsync and,
             // ultimately, VeraCrypt's own behaviour - it never writes the same encrypted bytes to both
             // header locations, even when the plaintext they encrypt is identical.
             var primaryRegion = await HeaderParser.BuildHeaderRegionAsync(
-                plaintextHeader, algorithm, hashAlgorithm, password, pim, keyFiles, cancellationToken).ConfigureAwait(false);
+                plaintextHeader, algorithm, hashAlgorithm, password, options.Pim, options.KeyFiles, cancellationToken).ConfigureAwait(false);
             var backupRegion = await HeaderParser.BuildHeaderRegionAsync(
-                plaintextHeader, algorithm, hashAlgorithm, password, pim, keyFiles, cancellationToken).ConfigureAwait(false);
+                plaintextHeader, algorithm, hashAlgorithm, password, options.Pim, options.KeyFiles, cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
 
             try
             {
-                await CreateContainerFileAsync(path, size, primaryRegion, backupRegion, cancellationToken).ConfigureAwait(false);
+                await CreateContainerFileAsync(path, size, primaryRegion, backupRegion, options.Overwrite, cancellationToken).ConfigureAwait(false);
                 // FileInfo caches Exists (and other metadata) as of when it was last queried -
                 // SectorDecryptor.CreateAsync's own Exists check would otherwise still see the false
                 // result path.Exists returned earlier in CreateAsync, before this method created the
@@ -592,8 +589,8 @@ namespace uk.andyjohnson.Asiri.Core
                     // the all-zero bytes CreateContainerFileAsync's own SetLength left behind.
                     await FillDataAreaWithRandomDataAsync(stream, cancellationToken).ConfigureAwait(false);
 
-                    var lifetime = new ContainerLifetime { MaxAccessMode = ContainerAccessMode.ReadWrite };
-                    var (fileSystem, root) = await FormatFileSystemAsync(fileSystemType, stream, dataAreaSize, label, clusterSize, lifetime, cancellationToken).ConfigureAwait(false);
+                    var lifetime = new ContainerLifetime(options.AccessMode);
+                    var (fileSystem, root) = await FormatFileSystemAsync(fileSystemType, stream, dataAreaSize, options.Label, options.ClusterSize, lifetime, cancellationToken).ConfigureAwait(false);
 
                     // Physically flush the newly-formatted data area before handing the container
                     // back - see SectorDecryptor.FlushToDisk. The caller may hand this file straight
@@ -602,7 +599,7 @@ namespace uk.andyjohnson.Asiri.Core
                     // otherwise still only be sitting in.
                     await Task.Run(() => stream.FlushToDisk(), cancellationToken).ConfigureAwait(false);
 
-                    return new VeraCryptContainer(stream, fileSystem, lifetime, root, algorithm, hashAlgorithm, fileSystemType);
+                    return new VeraCryptContainer(stream, fileSystem, lifetime, root, header, fileSystemType);
                 }
                 catch
                 {
@@ -617,18 +614,37 @@ namespace uk.andyjohnson.Asiri.Core
             }
         }
 
-        private static Task CreateContainerFileAsync(FileInfo path, long size, byte[] primaryRegion, byte[] backupRegion, CancellationToken cancellationToken)
+        private static Task CreateContainerFileAsync(FileInfo path, long size, byte[] primaryRegion, byte[] backupRegion, bool overwrite, CancellationToken cancellationToken)
         {
             return Task.Run(() =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
+                if (overwrite)
+                {
+                    // FileInfo caches Exists as of when it was last queried - CreateAsync's own check
+                    // ran before this method (and possibly before this Task.Run was even scheduled),
+                    // so re-check freshly rather than trusting that stale result.
+                    path.Refresh();
+                    if (path.Exists)
+                    {
+                        try
+                        {
+                            path.Delete();
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new InvalidOperationException($"Unable to replace existing container file: {path.FullName}", ex);
+                        }
+                    }
+                }
+
                 FileStream stream;
                 try
                 {
-                    // FileMode.CreateNew - rather than the already-performed path.Exists check alone -
-                    // closes the race between that check and this call: it throws if another process
-                    // (or another call into this method) created the file in the meantime.
+                    // FileMode.CreateNew - rather than the Exists check(s) above alone - closes the
+                    // race between those checks and this call: it throws if another process (or
+                    // another call into this method) created the file in the meantime.
                     stream = path.Open(FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
                 }
                 catch (Exception ex) when (!(ex is ArgumentException || ex is ArgumentNullException))
@@ -793,7 +809,8 @@ namespace uk.andyjohnson.Asiri.Core
                     // to recognise the volume at all (confirmed: a container this method created
                     // mounted successfully in real VeraCrypt - the encryption itself was never the
                     // problem - but Explorer could not read its contents), and neither would Asiri's
-                    // own password-only auto-detecting OpenAsync, which checks for exactly this.
+                    // own OpenAsync, which always auto-detects the filesystem type and checks for
+                    // exactly this.
                     stream.Seek(BootSignatureOffset, SeekOrigin.Begin);
                     stream.Write(new[] { BootSignatureLowByte, BootSignatureHighByte }, 0, 2);
 
@@ -881,15 +898,16 @@ namespace uk.andyjohnson.Asiri.Core
         }
 
         /// <summary>
-        /// Changes a container's password, keyfiles, PIM, and/or hash algorithm, without touching
+        /// Changes this container's password, keyfiles, PIM, and/or hash algorithm, without touching
         /// its contents. Verified against VeraCrypt's own source (Common/Password.c's
         /// <c>ChangePwd</c>), not just its documentation: the volume's master and secondary keys -
         /// the only things that actually protect its data - are never changed by this operation,
         /// only the header's own encryption key (re-derived from the new credentials with a fresh
-        /// random salt) is. Static, and does not require the container to already be open: this
-        /// never touches the filesystem region at all, so mounting one first via
-        /// <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/>
-        /// would be pure wasted work.
+        /// random salt) is. Requires the container to already be open with
+        /// <see cref="ContainerAccessMode.ReadWrite"/> - having opened it at all is itself the proof
+        /// that the caller knows the CURRENT credentials, so unlike a static method taking both old
+        /// and new credentials, there is nothing left to re-authenticate here: only the new
+        /// credentials are needed.
         /// </summary>
         /// <remarks>
         /// Rewrites the primary header first, then the backup header, each with its own independent
@@ -908,140 +926,93 @@ namespace uk.andyjohnson.Asiri.Core
         /// doesn't need this (it's mature, long-tested code); this one is new, so the extra check
         /// costs little and catches a bug in this method itself before it can ever reach disk.
         ///
+        /// Written through this container's own already-open stream (see
+        /// <see cref="SectorDecryptor.WriteRawRegion"/>), not a freshly-opened handle on the same
+        /// path - the data area's own handle is already open exclusively when writable, so a second
+        /// handle to the same file would fail to open at all.
+        ///
         /// Unlike real VeraCrypt, this does not perform its optional multi-pass anti-forensic
         /// overwrite of the old header location (each pass a genuinely valid header, just with a
         /// different random salt, intended to make recovering the old header via magnetic/flash
         /// remanence harder) - a deliberate scope decision, not an oversight: it is a defense-in-depth
         /// measure, not required for correctness.
         /// </remarks>
-        /// <param name="path">Path to the VeraCrypt container file.</param>
-        /// <param name="oldPassword">The container's current password.</param>
-        /// <param name="algorithm">
-        /// The container's encryption algorithm. Unlike every other credential here, this cannot
-        /// change: VeraCrypt itself never lets a password/keyfile change also change the cipher,
-        /// since that would require re-encrypting the entire data area, not just the header.
-        /// </param>
-        /// <param name="oldHashAlgorithm">The current hash algorithm used to derive keys from the password.</param>
-        /// <param name="oldPim">The container's current PIM, or 0 if it uses the default.</param>
-        /// <param name="oldKeyFiles">The container's current keyfiles, in order, or null for none.</param>
         /// <param name="newPassword">The new password.</param>
-        /// <param name="newPim">
-        /// The new PIM, or 0 for the default - not "keep the old one": VeraCrypt itself always
-        /// requires this to be stated explicitly for the new credentials, the same way
-        /// <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/>'s
-        /// own <c>pim</c> parameter does.
-        /// </param>
-        /// <param name="newKeyFiles">The new keyfiles, in order, or null for none.</param>
-        /// <param name="newHashAlgorithm">
-        /// The new hash algorithm, or null - the default - to keep <paramref name="oldHashAlgorithm"/>
-        /// unchanged. VeraCrypt itself allows the hash algorithm to change independently of the
-        /// password.
+        /// <param name="options">
+        /// Everything about the new credentials besides the password, or null to accept every
+        /// default - see <see cref="ChangeCredentialsOptions"/>.
         /// </param>
         /// <param name="cancellationToken">
         /// A token to cancel the operation. Honoured up until the point the first byte is written to
         /// disk; not checked again between the primary and backup writes, to keep that already-inherent
         /// window as short as possible rather than artificially widening it.
         /// </param>
-        public static async Task ChangePasswordAsync(
-            FileInfo path,
-            string oldPassword, CryptoAlgorithm algorithm, HashAlgorithm oldHashAlgorithm, int oldPim, IEnumerable<FileInfo> oldKeyFiles,
-            string newPassword, int newPim, IEnumerable<FileInfo> newKeyFiles, HashAlgorithm? newHashAlgorithm = null,
+        /// <exception cref="InvalidOperationException">
+        /// Thrown if this container is not open with <see cref="ContainerAccessMode.ReadWrite"/>.
+        /// </exception>
+        public async Task ChangeCredentialsAsync(
+            string newPassword,
+            ChangeCredentialsOptions options = null,
             CancellationToken cancellationToken = default)
         {
-            if (path == null)
-            {
-                throw new ArgumentNullException(nameof(path));
-            }
-            if (oldPassword == null)
-            {
-                throw new ArgumentNullException(nameof(oldPassword));
-            }
             if (newPassword == null)
             {
                 throw new ArgumentNullException(nameof(newPassword));
             }
-            if (!CascadeDefinitions.IsSupported(algorithm))
+            _lifetime.ThrowIfClosed();
+            _lifetime.ThrowIfNotWritable();
+
+            options = options ?? new ChangeCredentialsOptions();
+            if (options.NewPim < 0)
             {
-                throw new ArgumentException($"Unsupported encryption algorithm: {algorithm}.", nameof(algorithm));
+                throw new ArgumentException($"PIM must not be negative: {options.NewPim}.", nameof(options));
             }
-            if (!SupportedHashAlgorithms.Contains(oldHashAlgorithm))
+            if (options.NewHashAlgorithm.HasValue && !SupportedHashAlgorithms.Contains(options.NewHashAlgorithm.Value))
             {
-                throw new ArgumentException($"Unsupported hash algorithm: {oldHashAlgorithm}.", nameof(oldHashAlgorithm));
-            }
-            if (newHashAlgorithm.HasValue && !SupportedHashAlgorithms.Contains(newHashAlgorithm.Value))
-            {
-                throw new ArgumentException($"Unsupported hash algorithm: {newHashAlgorithm.Value}.", nameof(newHashAlgorithm));
-            }
-            if (oldPim < 0)
-            {
-                throw new ArgumentException($"PIM must not be negative: {oldPim}.", nameof(oldPim));
-            }
-            if (newPim < 0)
-            {
-                throw new ArgumentException($"PIM must not be negative: {newPim}.", nameof(newPim));
+                throw new ArgumentException($"Unsupported hash algorithm: {options.NewHashAlgorithm.Value}.", nameof(options));
             }
 
-            var effectiveNewHashAlgorithm = newHashAlgorithm ?? oldHashAlgorithm;
-
-            // Reading and validating the OLD header, with the OLD credentials, is both how we obtain
-            // the master/secondary key and the ONLY proof that the caller actually knows the current
-            // credentials - never skip or weaken this to get here faster.
-            var oldHeader = await HeaderParser.ParseAsync(path, oldPassword, algorithm, oldHashAlgorithm, oldPim, oldKeyFiles, cancellationToken).ConfigureAwait(false);
+            var effectiveNewHashAlgorithm = options.NewHashAlgorithm ?? HashAlgorithm;
 
             var newPrimaryRegion = await HeaderParser.BuildHeaderRegionAsync(
-                oldHeader.DecryptedBytes, algorithm, effectiveNewHashAlgorithm, newPassword, newPim, newKeyFiles, cancellationToken).ConfigureAwait(false);
-            await SelfVerifyAsync(oldHeader, newPrimaryRegion, algorithm, effectiveNewHashAlgorithm, newPassword, newPim, newKeyFiles, fromBackup: false, cancellationToken).ConfigureAwait(false);
+                _header.DecryptedBytes, Algorithm, effectiveNewHashAlgorithm, newPassword, options.NewPim, options.NewKeyFiles, cancellationToken).ConfigureAwait(false);
+            await SelfVerifyAsync(_header, newPrimaryRegion, Algorithm, effectiveNewHashAlgorithm, newPassword, options.NewPim, options.NewKeyFiles, fromBackup: false, cancellationToken).ConfigureAwait(false);
 
             var newBackupRegion = await HeaderParser.BuildHeaderRegionAsync(
-                oldHeader.DecryptedBytes, algorithm, effectiveNewHashAlgorithm, newPassword, newPim, newKeyFiles, cancellationToken).ConfigureAwait(false);
-            await SelfVerifyAsync(oldHeader, newBackupRegion, algorithm, effectiveNewHashAlgorithm, newPassword, newPim, newKeyFiles, fromBackup: true, cancellationToken).ConfigureAwait(false);
+                _header.DecryptedBytes, Algorithm, effectiveNewHashAlgorithm, newPassword, options.NewPim, options.NewKeyFiles, cancellationToken).ConfigureAwait(false);
+            await SelfVerifyAsync(_header, newBackupRegion, Algorithm, effectiveNewHashAlgorithm, newPassword, options.NewPim, options.NewKeyFiles, fromBackup: true, cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            FileStream fileStream;
+            // Primary first, then backup: if this is interrupted in between, the container is still
+            // openable with the OLD credentials via automatic backup-header fallback, since the
+            // backup hasn't been touched yet. CancellationToken.None from here on - see the remarks
+            // on honouring cancellation only up to this point. FlushToDisk after each - a physical
+            // flush, not just a push into the OS's own shared cache - matching how VeraCrypt's own
+            // driver can read this file with cache-bypassing, unbuffered I/O.
+            await Task.Run(() => _stream.WriteRawRegion(0, newPrimaryRegion), CancellationToken.None).ConfigureAwait(false);
+            await Task.Run(() => _stream.FlushToDisk(), CancellationToken.None).ConfigureAwait(false);
+
+            var backupOffset = HeaderParser.DataAreaOffset + _stream.Length;
             try
             {
-                fileStream = path.Open(FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                await Task.Run(() => _stream.WriteRawRegion(backupOffset, newBackupRegion), CancellationToken.None).ConfigureAwait(false);
+                await Task.Run(() => _stream.FlushToDisk(), CancellationToken.None).ConfigureAwait(false);
             }
-            catch (Exception ex) when (!(ex is ArgumentException || ex is ArgumentNullException))
+            catch (Exception ex)
             {
-                throw new InvalidOperationException($"Unable to open container file for writing: {path.FullName}", ex);
-            }
-
-            using (fileStream)
-            {
-                // Primary first, then backup: if this is interrupted in between, the container is
-                // still openable with the OLD credentials via automatic backup-header fallback, since
-                // the backup hasn't been touched yet. CancellationToken.None from here on - see the
-                // remarks on honouring cancellation only up to this point.
-                // Flush(true) throughout, not the parameterless overload - see
-                // SectorDecryptor.FlushToDisk: a physical flush, not just a push into the OS's own
-                // shared cache, matching how VeraCrypt's own driver can read this file with
-                // cache-bypassing, unbuffered I/O.
-                await HeaderParser.WriteRegionAsync(fileStream, 0, newPrimaryRegion, CancellationToken.None).ConfigureAwait(false);
-                fileStream.Flush(true);
-
-                var backupOffset = fileStream.Length - HeaderParser.BackupHeaderOffsetFromEnd;
-                try
-                {
-                    await HeaderParser.WriteRegionAsync(fileStream, backupOffset, newBackupRegion, CancellationToken.None).ConfigureAwait(false);
-                    fileStream.Flush(true);
-                }
-                catch (Exception ex)
-                {
-                    throw new InvalidOperationException(
-                        "The primary header was rewritten with the new credentials, but writing the backup " +
-                        "header failed. The container is still fully openable with the NEW credentials (the " +
-                        "primary header succeeded); the backup header still reflects the OLD credentials " +
-                        "until this is retried.", ex);
-                }
+                throw new InvalidOperationException(
+                    "The primary header was rewritten with the new credentials, but writing the backup " +
+                    "header failed. The container is still fully openable with the NEW credentials (the " +
+                    "primary header succeeded); the backup header still reflects the OLD credentials " +
+                    "until this is retried.", ex);
             }
         }
 
         /// <summary>
         /// Confirms a newly built header region actually decrypts back to a valid header, with the
         /// new credentials, that carries the exact same master and secondary key as the original -
-        /// entirely in memory, before <see cref="ChangePasswordAsync"/> writes anything to disk.
+        /// entirely in memory, before <see cref="ChangeCredentialsAsync"/> writes anything to disk.
         /// </summary>
         private static async Task SelfVerifyAsync(
             VeraCryptHeader oldHeader, byte[] newRegion, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm,
@@ -1065,6 +1036,14 @@ namespace uk.andyjohnson.Asiri.Core
             FileInfo path, string password, int pim, IEnumerable<FileInfo> keyFiles,
             CryptoAlgorithm? algo, HashAlgorithm? hashAlgo, CancellationToken cancellationToken)
         {
+            // Matches HeaderParser.ParseAsync's own explicit existence check - a missing file is a
+            // bad argument, not a mid-operation failure, and OpenAsync now always reaches this method
+            // regardless of whether the caller already knew the algorithm/hash.
+            if (!path.Exists)
+            {
+                throw new ArgumentException($"Container file not found: {path.FullName}", nameof(path));
+            }
+
             Stream stream;
             try
             {
@@ -1121,9 +1100,8 @@ namespace uk.andyjohnson.Asiri.Core
         /// <summary>
         /// Every <see cref="HashAlgorithm"/> this library supports, in the order
         /// <see cref="TryAllCombinationsAsync"/> tries them when the caller hasn't already narrowed
-        /// it down via <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, ContainerAccessMode, CancellationToken)"/>'s
-        /// <c>hashAlgo</c> parameter. Also doubles as the validation set for that parameter - see
-        /// <c>SupportedHashAlgorithms.Contains</c> in <c>OpenAsync</c> above.
+        /// it down via <see cref="OpenOptions.HashAlgorithm"/>. Also doubles as the validation set for
+        /// that option - see <c>SupportedHashAlgorithms.Contains</c> in <see cref="OpenAsync"/> above.
         /// </summary>
         private static readonly HashAlgorithm[] SupportedHashAlgorithms = (HashAlgorithm[])Enum.GetValues(typeof(HashAlgorithm));
 
@@ -1134,9 +1112,8 @@ namespace uk.andyjohnson.Asiri.Core
         /// search itself works. When both are supplied this still goes through the same brute-force
         /// scaffolding (reading header regions, mixing keyfiles) as a single, one-combination search,
         /// rather than <see cref="HeaderParser.ParseAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, int, IEnumerable{FileInfo}, CancellationToken)"/>'s
-        /// more direct path - a caller with full knowledge of both should prefer the fully-explicit
-        /// <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/>
-        /// overload instead, which also skips filesystem-type detection.
+        /// more direct path - a small, deliberate overhead in exchange for <see cref="OpenAsync"/>
+        /// only ever needing one code path regardless of how much the caller already knows.
         /// </summary>
         private static async Task<VeraCryptHeader> TryAllCombinationsAsync(
             byte[] region, byte[] passwordBytes, bool fromBackup, int pim,
@@ -1219,8 +1196,8 @@ namespace uk.andyjohnson.Asiri.Core
                     var exFat = await OpenExFatAsync(stream, cancellationToken).ConfigureAwait(false);
                     return (exFat, new ExFatDirectory(exFat, ExFatPathHelper.Root, lifetime));
                 default:
-                    // Unreachable: fsType is either caller-validated (explicit-fsType OpenAsync) or
-                    // computed by DetectFileSystemTypeAsync, which only ever returns a defined value.
+                    // Unreachable: fsType is either caller-validated (CreateAsync) or computed by
+                    // DetectFileSystemTypeAsync (OpenAsync), which only ever returns a defined value.
                     throw new ArgumentException($"Unsupported filesystem type: {fsType}.", nameof(fsType));
             }
         }
@@ -1294,71 +1271,33 @@ namespace uk.andyjohnson.Asiri.Core
         public IDirectory Root { get; private set; }
 
         /// <summary>
-        /// The encryption algorithm the container was opened with - either as given to the
-        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/>,
-        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, ContainerAccessMode, CancellationToken)"/>.
+        /// The encryption algorithm the container was opened with - either given via
+        /// <see cref="OpenOptions.Algorithm"/>, or auto-detected if it wasn't.
         /// </summary>
         public CryptoAlgorithm Algorithm { get; private set; }
 
         /// <summary>
-        /// The hash algorithm the container was opened with - either as given to the
-        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/>,
-        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, ContainerAccessMode, CancellationToken)"/>.
+        /// The hash algorithm the container was opened with - either given via
+        /// <see cref="OpenOptions.HashAlgorithm"/>, or auto-detected if it wasn't.
         /// </summary>
         public HashAlgorithm HashAlgorithm { get; private set; }
 
         /// <summary>
-        /// The filesystem type detected within the container - either as given to the
-        /// explicit-parameters <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/>,
-        /// or as detected by the password-only <see cref="OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, ContainerAccessMode, CancellationToken)"/>.
+        /// The filesystem type detected within the container - always auto-detected from the
+        /// decrypted volume's boot sector; there is no equivalent caller-supplied option for it.
         /// </summary>
         public FileSystemType FileSystemType { get; private set; }
 
         /// <summary>
-        /// Whether writing is currently armed. Starts false even when this container was opened with
-        /// <see cref="ContainerAccessMode.ReadWrite"/> - opening for write access and actually
-        /// permitting a write are two separate, both-required steps, deliberately: an errant code
-        /// path that opens a container read-write when it shouldn't have still can't write anything
-        /// without this also being set. Every mutating <see cref="IFile"/>/<see cref="IDirectory"/>
-        /// call checks this at the moment it's made (or, for <see cref="IFile.OpenWriteAsync"/>, at
-        /// the moment the write stream is opened) - not continuously for the lifetime of an
-        /// already-open write stream, so setting this false does not retroactively stop a write
-        /// already in progress through a stream obtained earlier.
+        /// The access this container was opened or created with - fixed for its whole session; there
+        /// is no separate runtime arm/disarm step. Every mutating <see cref="IFile"/>/
+        /// <see cref="IDirectory"/> call checks this is <see cref="ContainerAccessMode.ReadWrite"/> at
+        /// the moment it's made (or, for <see cref="IFile.OpenWriteAsync"/>, at the moment the write
+        /// stream is opened) - not continuously for the lifetime of an already-open write stream, so
+        /// this can't retroactively stop a write already in progress through a stream obtained
+        /// earlier. To change it, close the container and reopen it with a different value.
         /// </summary>
-        /// <exception cref="InvalidOperationException">
-        /// Thrown when setting this true if the container was opened with
-        /// <see cref="ContainerAccessMode.ReadOnly"/>: that ceiling can only be raised by closing and
-        /// reopening the container with <see cref="ContainerAccessMode.ReadWrite"/>, never at runtime.
-        /// </exception>
-        public bool IsWritable
-        {
-            get => _lifetime.IsWritable;
-            set
-            {
-                _lifetime.ThrowIfClosed();
-                if (value && _lifetime.MaxAccessMode != ContainerAccessMode.ReadWrite)
-                {
-                    throw new InvalidOperationException(
-                        "Cannot enable writing: this container was opened with ContainerAccessMode.ReadOnly. " +
-                        "Close it and reopen with ContainerAccessMode.ReadWrite instead.");
-                }
-                _lifetime.IsWritable = value;
-            }
-        }
-
-        /// <summary>
-        /// The size, in bytes, of the container's decrypted filesystem - its encrypted data area,
-        /// i.e. <see cref="HeaderParser.TotalHeaderOverheadSize"/> less than the container's own total
-        /// file size. What <see cref="DumpRawImageAsync"/> writes for <see cref="RawImageExportFormat.RawImage"/>.
-        /// </summary>
-        public long FileSystemSizeInBytes
-        {
-            get
-            {
-                _lifetime.ThrowIfClosed();
-                return _stream.Length;
-            }
-        }
+        public ContainerAccessMode AccessMode => _lifetime.MaxAccessMode;
 
         /// <summary>
         /// Exports the container's decrypted filesystem to <paramref name="destination"/>, in the
@@ -1372,9 +1311,9 @@ namespace uk.andyjohnson.Asiri.Core
         /// The stream to write the export to. Written to starting at its current position; never
         /// sought or resized by this method.
         /// </param>
-        /// <param name="format">The export format - see <see cref="RawImageExportFormat"/>.</param>
+        /// <param name="format">The export format - see <see cref="FileSystemExportFormat"/>.</param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
-        public Task DumpRawImageAsync(Stream destination, RawImageExportFormat format = RawImageExportFormat.RawImage, CancellationToken cancellationToken = default)
+        public Task ExportFileSystemAsync(Stream destination, FileSystemExportFormat format = FileSystemExportFormat.RawImage, CancellationToken cancellationToken = default)
         {
             if (destination == null)
             {
@@ -1382,40 +1321,40 @@ namespace uk.andyjohnson.Asiri.Core
             }
             switch (format)
             {
-                case RawImageExportFormat.RawImage:
-                case RawImageExportFormat.RawImageBootSectorOnly:
-                case RawImageExportFormat.Vhd:
-                case RawImageExportFormat.VhdWithPartitionTable:
+                case FileSystemExportFormat.RawImage:
+                case FileSystemExportFormat.RawImageBootSectorOnly:
+                case FileSystemExportFormat.Vhd:
+                case FileSystemExportFormat.VhdWithPartitionTable:
                     break;
                 default:
                     throw new ArgumentException($"Unsupported export format: {format}.", nameof(format));
             }
             _lifetime.ThrowIfClosed();
 
-            return DumpRawImageAsyncCore(destination, format, cancellationToken);
+            return ExportFileSystemAsyncCore(destination, format, cancellationToken);
         }
 
-        private Task DumpRawImageAsyncCore(Stream destination, RawImageExportFormat format, CancellationToken cancellationToken)
+        private Task ExportFileSystemAsyncCore(Stream destination, FileSystemExportFormat format, CancellationToken cancellationToken)
         {
             switch (format)
             {
-                case RawImageExportFormat.RawImage:
+                case FileSystemExportFormat.RawImage:
                     return CopyRawBytesAsync(destination, _stream.Length, cancellationToken);
-                case RawImageExportFormat.RawImageBootSectorOnly:
+                case FileSystemExportFormat.RawImageBootSectorOnly:
                     return CopyRawBytesAsync(destination, DefaultSectorSize, cancellationToken);
-                case RawImageExportFormat.Vhd:
+                case FileSystemExportFormat.Vhd:
                     return WriteVhdAsync(destination, cancellationToken);
-                case RawImageExportFormat.VhdWithPartitionTable:
+                case FileSystemExportFormat.VhdWithPartitionTable:
                     return WriteVhdWithPartitionTableAsync(destination, cancellationToken);
                 default:
-                    // Unreachable: format is already caller-validated by DumpRawImageAsync.
+                    // Unreachable: format is already caller-validated by ExportFileSystemAsync.
                     throw new ArgumentException($"Unsupported export format: {format}.", nameof(format));
             }
         }
 
         /// <summary>
         /// Wraps the container's decrypted filesystem in a fixed-size VHD with no partition table -
-        /// see <see cref="RawImageExportFormat.Vhd"/>'s own remarks for why no partition table.
+        /// see <see cref="FileSystemExportFormat.Vhd"/>'s own remarks for why no partition table.
         /// </summary>
         private async Task WriteVhdAsync(Stream destination, CancellationToken cancellationToken)
         {
@@ -1436,7 +1375,7 @@ namespace uk.andyjohnson.Asiri.Core
 
         /// <summary>
         /// Wraps the container's decrypted filesystem in a fixed-size VHD with a single MBR partition
-        /// around it - see <see cref="RawImageExportFormat.VhdWithPartitionTable"/>'s own remarks.
+        /// around it - see <see cref="FileSystemExportFormat.VhdWithPartitionTable"/>'s own remarks.
         /// </summary>
         private async Task WriteVhdWithPartitionTableAsync(Stream destination, CancellationToken cancellationToken)
         {

@@ -8,23 +8,24 @@ This document takes precedence over all other instructions for the Asiri.Core pr
 
 ## Scope
 - Implement read access to VeraCrypt encrypted file containers.
-- Implement write access to VeraCrypt encrypted file containers, gated by
-  `VeraCryptContainer.ContainerAccessMode` (an open-time ceiling) and `VeraCryptContainer.IsWritable`
-  (a separate, explicit runtime arm/disarm switch, off by default even when opened for read-write) -
-  both must be set before any write is permitted. Limited to fixed-size containers: do not implement
-  growing or shrinking a container's size.
-- Implement changing a container's password, keyfiles, PIM, and/or hash algorithm
-  (`VeraCryptContainer.ChangePasswordAsync`), verified against VeraCrypt's own source
-  (Common/Password.c's `ChangePwd`): the master and secondary keys are never changed, only the
-  header's own encryption key (re-derived with a fresh random salt) is, and both the primary and
-  backup header are rewritten, each with its own independent salt. Static - does not require the
-  container to already be open, since this never reaches the filesystem region. The encryption
+- Implement write access to VeraCrypt encrypted file containers, gated solely by
+  `VeraCryptContainer.AccessMode` (fixed for the whole session by whichever `ContainerAccessMode`
+  the container was opened or created with - there is no separate runtime arm/disarm switch).
+  Limited to fixed-size containers: do not implement growing or shrinking a container's size.
+- Implement changing an already-open container's password, keyfiles, PIM, and/or hash algorithm
+  (`VeraCryptContainer.ChangeCredentialsAsync`, an instance method requiring
+  `ContainerAccessMode.ReadWrite` - having opened the container at all is itself the proof of the
+  current credentials, so there is nothing left to re-authenticate), verified against VeraCrypt's
+  own source (Common/Password.c's `ChangePwd`): the master and secondary keys are never changed,
+  only the header's own encryption key (re-derived with a fresh random salt) is, and both the
+  primary and backup header are rewritten, each with its own independent salt, through the
+  container's own already-open stream rather than a second handle on the same file. The encryption
   algorithm cannot change this way. Two scope reductions relative to real VeraCrypt, both deliberate:
   no multi-pass anti-forensic overwrite of the old header location, and no preservation of the
   container file's own timestamps.
 - Implement creating a brand new container (`VeraCryptContainer.CreateAsync`): a freshly generated
   master key, a header built from scratch (not re-encrypting an existing one, unlike
-  `ChangePasswordAsync`), and the chosen filesystem formatted via DiscUtils directly onto the
+  `ChangeCredentialsAsync`), and the chosen filesystem formatted via DiscUtils directly onto the
   container's encrypted stream. The caller-specified size is the container's TOTAL FILE SIZE,
   verified against VeraCrypt's own source (Common/Format.c's `TCFormatVolume`) - VeraCrypt's fixed
   256 KiB header overhead comes out of that, not on top of it. An optional cluster size may be
@@ -42,9 +43,9 @@ This document takes precedence over all other instructions for the Asiri.Core pr
   ever writes its own metadata, never the free clusters it marks unused, so without this fill those
   clusters would remain the raw, unencrypted zero bytes a newly-extended file starts as, rather than
   looking like every other part of a genuine VeraCrypt volume.
-- Implement `VeraCryptContainer.DumpRawImageAsync`/`FileSystemSizeInBytes`: a diagnostic escape hatch
-  that exports a container's decrypted filesystem, unencrypted and uninterpreted by DiscUtils or
-  Asiri, to a caller-supplied stream in one of four `RawImageExportFormat`s - the whole filesystem as
+- Implement `VeraCryptContainer.ExportFileSystemAsync`: a diagnostic escape hatch that exports a
+  container's decrypted filesystem, unencrypted and uninterpreted by DiscUtils or
+  Asiri, to a caller-supplied stream in one of four `FileSystemExportFormat`s - the whole filesystem as
   a bare image, just its first 512 bytes, or wrapped in a VHD (with or without a single MBR partition
   around it - both exist side by side specifically to separate "is the filesystem's own content
   wrong" from "does a partitioned-vs-unpartitioned layout matter" while diagnosing a real-OS
@@ -132,7 +133,7 @@ This document takes precedence over all other instructions for the Asiri.Core pr
 
 ## Dependencies
 - Use only BouncyCastle and DiscUtils (the LTRData.DiscUtils.* packages: Core, Fat, Ntfs, ExFat, Vhd -
-  the last used only for `DumpRawImageAsync`'s VHD export format, not for anything container-format
+  the last used only for `ExportFileSystemAsync`'s VHD export format, not for anything container-format
   related).
 - Do not add any other dependencies without explicit permission.
 

@@ -167,6 +167,16 @@ namespace uk.andyjohnson.Asiri.Core
             _decryptor.FlushToDisk();
         }
 
+        /// <summary>
+        /// Writes already-encrypted bytes directly to an arbitrary byte offset in the underlying
+        /// file, bypassing this stream's own sector-addressable data area entirely - see
+        /// <see cref="SectorDecryptor.WriteRawRegion"/>.
+        /// </summary>
+        internal void WriteRawRegion(long offset, byte[] data)
+        {
+            _decryptor.WriteRawRegion(offset, data);
+        }
+
         /// <inheritdoc />
         protected override void Dispose(bool disposing)
         {

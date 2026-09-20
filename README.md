@@ -95,23 +95,23 @@ exposes `Path`, `Parent`, `GetAttributesAsync()` (read-only, hidden, system, etc
 streaming a large file's contents instead of buffering it all via `ReadAllBytesAsync()`.
 
 **Write access** (opt-in, off by default — see the caution above): opening a container with
-`ContainerAccessMode.ReadWrite` and then explicitly setting `IsWritable = true` enables creating,
-deleting, renaming, and moving files and directories, setting attributes and timestamps, and writing
-file content via `IFile.OpenWriteAsync()`. Both the access mode (checked at open time) and
-`IsWritable` (checked per-operation, and can be turned back off) must agree for a write to be
-allowed — this two-key gate is deliberate, so that opening a container for potential writing doesn't
-by itself put it at risk. Only fixed-size containers are supported for writing: Asiri cannot grow or
-shrink a container, so operations that would change its size beyond its existing free space behave
-the same as they would on a full disk.
+`ContainerAccessMode.ReadWrite` enables creating, deleting, renaming, and moving files and
+directories, setting attributes and timestamps, and writing file content via
+`IFile.OpenWriteAsync()`. `ContainerAccessMode` is fixed for the container's whole session — there
+is no separate runtime switch to arm or disarm afterward — and only fixed-size containers are
+supported for writing: Asiri cannot grow or shrink a container, so operations that would change its
+size beyond its existing free space behave the same as they would on a full disk.
 
 **Changing a password, keyfiles, PIM, and/or hash algorithm** (opt-in, pre-release — see the caution
-above): `VeraCryptContainer.ChangePasswordAsync` rewrites a container's volume header — both the
-primary and backup copies, each with its own independent random salt — under a freshly derived key,
-without touching the container's contents: the master and secondary keys that actually protect the
-data are never changed. Verified against VeraCrypt's own source, not just its documentation. Static,
-and doesn't require the container to be open first, since this never reaches the filesystem region
-at all. Two scope reductions relative to real VeraCrypt, both deliberate: no multi-pass anti-forensic
-overwrite of the old header location (VeraCrypt's own optional defense against recovering it via
+above): `VeraCryptContainer.ChangeCredentialsAsync`, an instance method on an already-open,
+`ContainerAccessMode.ReadWrite` container, rewrites its volume header — both the primary and backup
+copies, each with its own independent random salt — under a freshly derived key, without touching
+the container's contents: the master and secondary keys that actually protect the data are never
+changed. Verified against VeraCrypt's own source, not just its documentation. Having opened the
+container with `ReadWrite` access at all is itself the proof of its current credentials, so unlike a
+static method taking both old and new credentials, only the new ones need supplying here. Two scope
+reductions relative to real VeraCrypt, both deliberate: no multi-pass anti-forensic overwrite of the
+old header location (VeraCrypt's own optional defense against recovering it via
 magnetic/flash remanence), and no preservation of the container file's own timestamps. Like write
 access, the encryption algorithm itself cannot change this way — only the header's own encryption key
 can, matching VeraCrypt's own behaviour.
@@ -161,20 +161,19 @@ finally
 ```
 
 If you already know the encryption algorithm, the hash algorithm, or both, passing what you know
-narrows the search accordingly. The filesystem type has no equivalent parameter: it's always
-detected directly from the decrypted volume's boot sector rather than searched for, so there's
-nothing to narrow on that axis.
+via `OpenOptions` narrows the search accordingly. The filesystem type has no equivalent option:
+it's always detected directly from the decrypted volume's boot sector rather than searched for, so
+there's nothing to narrow on that axis.
 
 ```csharp
 // Known algorithm, unknown hash: only the hash algorithm is searched for.
 var container = await VeraCryptContainer.OpenAsync(
     new FileInfo(@"C:\path\to\container.hc"),
     password: "correct horse battery staple",
-    algo: CryptoAlgorithm.Aes);
+    new OpenOptions { Algorithm = CryptoAlgorithm.Aes });
 ```
 
-And if you already know the container's algorithm, hash, and filesystem type, a fully explicit
-overload of `OpenAsync` accepts all three and skips detection entirely. Every I/O method is
+`OpenOptions` also carries the PIM, keyfiles, and access mode - see below. Every I/O method is
 `CancellationToken`-aware.
 
 ## Writing to a container
@@ -182,9 +181,8 @@ overload of `OpenAsync` accepts all three and skips detection entirely. Every I/
 **⚠️ Back up the container file before running this. Write access is pre-release and has not been
 verified against real VeraCrypt — see the caution earlier in this README.**
 
-Writing requires two things: opening with `ContainerAccessMode.ReadWrite`, and then explicitly
-arming `IsWritable`. Either alone is not enough — this is intentional, so that code paths which
-merely *open* a container can't accidentally write to it.
+Writing requires opening with `ContainerAccessMode.ReadWrite` - fixed for the container's whole
+session, with no separate step to arm it afterward.
 
 ```csharp
 using System.IO;
@@ -195,9 +193,7 @@ using uk.andyjohnson.Asiri.Core;
 var container = await VeraCryptContainer.OpenAsync(
     new FileInfo(@"C:\path\to\container.hc"),
     password: "correct horse battery staple",
-    accessMode: ContainerAccessMode.ReadWrite);
-
-container.IsWritable = true;
+    new OpenOptions { AccessMode = ContainerAccessMode.ReadWrite });
 
 try
 {
@@ -228,32 +224,33 @@ Only fixed-size containers are supported — Asiri cannot grow or shrink a conta
 against real VeraCrypt — see the caution earlier in this README. A bug here risks a worse outcome
 than a filesystem write bug: the container could become permanently unopenable.**
 
-Unlike opening or writing to a container, this doesn't need the container to already be open —
-`ChangePasswordAsync` is static, and operates directly on the file:
+Unlike the static method this used to be, `ChangeCredentialsAsync` is an instance method on a
+container already open with `ContainerAccessMode.ReadWrite` — having opened it at all is itself the
+proof of its current credentials, so only the new ones need supplying:
 
 ```csharp
 using System.IO;
 using uk.andyjohnson.Asiri.Core;
 
-await VeraCryptContainer.ChangePasswordAsync(
+var container = await VeraCryptContainer.OpenAsync(
     new FileInfo(@"C:\path\to\container.hc"),
-    oldPassword: "correct horse battery staple",
-    algorithm: CryptoAlgorithm.Aes,
-    oldHashAlgorithm: HashAlgorithm.Sha512,
-    oldPim: 0,
-    oldKeyFiles: null,
-    newPassword: "a different correct horse battery staple",
-    newPim: 0,
-    newKeyFiles: null);
+    password: "correct horse battery staple",
+    new OpenOptions { Algorithm = CryptoAlgorithm.Aes, HashAlgorithm = HashAlgorithm.Sha512, AccessMode = ContainerAccessMode.ReadWrite });
+
+try
+{
+    await container.ChangeCredentialsAsync("a different correct horse battery staple");
+}
+finally
+{
+    container.Close();
+}
 ```
 
-The encryption algorithm must be known and stated explicitly — unlike `OpenAsync`, there is no
-auto-detecting overload here, since this is a destructive operation and shouldn't invite a slow
-brute-force guess before it runs. The PIM and keyfiles can change independently of the password, and
-so can the hash algorithm, via an optional `newHashAlgorithm` parameter — omit it to keep the current
-one. The encryption algorithm itself is the one thing that can never change this way, matching
-VeraCrypt's own behaviour: changing it would mean re-encrypting the entire data area, not just the
-header.
+The PIM and keyfiles can change independently of the password, and so can the hash algorithm, via
+`ChangeCredentialsOptions`' optional `NewHashAlgorithm` — omit it to keep the current one. The
+encryption algorithm itself is the one thing that can never change this way, matching VeraCrypt's
+own behaviour: changing it would mean re-encrypting the entire data area, not just the header.
 
 ## Repository structure
 

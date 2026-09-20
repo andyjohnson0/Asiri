@@ -19,9 +19,9 @@ namespace uk.andyjohnson.Asiri.Core.Tests
     /// is new in this stage, and each has its own real behavioural differences from NTFS (e.g. 8.3
     /// naming, case handling) that only actually exercising them - not just NTFS - would catch.
     ///
-    /// The ContainerAccessMode/IsWritable gating tests near the top are the exception: that logic is
-    /// entirely filesystem-agnostic (it never reaches DiscUtils at all), so those run once, against
-    /// NTFS only, rather than being parameterized for no added value.
+    /// The ContainerAccessMode gating tests near the top are the exception: that logic is entirely
+    /// filesystem-agnostic (it never reaches DiscUtils at all), so those run once, against NTFS
+    /// only, rather than being parameterized for no added value.
     ///
     /// Every test that actually writes opens a TemporaryContainerCopy of the real fixture - never the
     /// checked-in original under "Test Data".
@@ -38,31 +38,27 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         }
 
         private static async Task<(TemporaryContainerCopy copy, VeraCryptContainer container)> OpenWritableCopyAsync(
-            TestContainers.ContainerFixture fixture, bool armWriting = true)
+            TestContainers.ContainerFixture fixture)
         {
             var copy = new TemporaryContainerCopy(fixture.ContainerFile);
             var container = await VeraCryptContainer.OpenAsync(
-                copy.File, fixture.Password, fixture.Algorithm, fixture.HashAlgorithm, fixture.FilesystemType,
-                accessMode: ContainerAccessMode.ReadWrite);
-            if (armWriting)
-            {
-                container.IsWritable = true;
-            }
+                copy.File, fixture.Password,
+                new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, AccessMode = ContainerAccessMode.ReadWrite });
             return (copy, container);
         }
 
-        // --- ContainerAccessMode / IsWritable gating (filesystem-agnostic - tested once, via NTFS) ---
+        // --- ContainerAccessMode gating (filesystem-agnostic - tested once, via NTFS) ---
 
         [Fact]
-        public async Task OpenAsync_DefaultAccessMode_IsWritableStartsFalseAndCannotBeEnabled()
+        public async Task OpenAsync_DefaultAccessMode_IsReadOnlyAndWriteOperationThrows()
         {
             var fixture = TestContainers.AesNtfs;
             var container = await VeraCryptContainer.OpenAsync(
-                fixture.ContainerFile, fixture.Password, fixture.Algorithm, fixture.HashAlgorithm, fixture.FilesystemType);
+                fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm });
             try
             {
-                Assert.False(container.IsWritable);
-                Assert.Throws<InvalidOperationException>(() => container.IsWritable = true);
+                Assert.Equal(ContainerAccessMode.ReadOnly, container.AccessMode);
+                await Assert.ThrowsAsync<InvalidOperationException>(() => container.Root.CreateFileAsync("new.txt"));
             }
             finally
             {
@@ -71,16 +67,18 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         }
 
         [Fact]
-        public async Task OpenAsync_ReadWriteAccessMode_IsWritableStartsFalse()
+        public async Task OpenAsync_ReadWriteAccessMode_PermitsWritingImmediately()
         {
-            var (copy, container) = await OpenWritableCopyAsync(TestContainers.AesNtfs, armWriting: false);
+            // There is no separate arm/disarm step any more - opening with ReadWrite is itself
+            // sufficient, unlike the two-key mechanism this replaced.
+            var (copy, container) = await OpenWritableCopyAsync(TestContainers.AesNtfs);
             using (copy)
             {
                 try
                 {
-                    // Opening for write access and actually permitting a write are deliberately two
-                    // separate, both-required steps - see ContainerLifetime's own remarks.
-                    Assert.False(container.IsWritable);
+                    Assert.Equal(ContainerAccessMode.ReadWrite, container.AccessMode);
+                    var file = await container.Root.CreateFileAsync("new.txt");
+                    Assert.NotNull(file);
                 }
                 finally
                 {
@@ -153,44 +151,22 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             }
         }
 
-        // --- These gate on IsWritable before ever reaching DiscUtils, so they're worth running
-        // across all four fixtures too, cheaply proving the gate itself doesn't depend on filesystem
-        // type despite living inside each filesystem's own wrapper classes.
+        // --- This gates on AccessMode before ever reaching DiscUtils, so it's worth running across
+        // all four fixtures too, cheaply proving the gate itself doesn't depend on filesystem type
+        // despite living inside each filesystem's own wrapper classes.
 
         [Theory]
         [MemberData(nameof(WritableFixtures))]
-        public async Task CreateFileAsync_WhenIsWritableFalse_ThrowsInvalidOperationException_EvenThoughOpenedReadWrite(TestContainers.ContainerFixture fixture)
+        public async Task CreateFileAsync_WhenOpenedReadOnly_ThrowsInvalidOperationException(TestContainers.ContainerFixture fixture)
         {
-            var (copy, container) = await OpenWritableCopyAsync(fixture, armWriting: false);
-            using (copy)
+            var container = await fixture.OpenAsync();
+            try
             {
-                try
-                {
-                    await Assert.ThrowsAsync<InvalidOperationException>(() => container.Root.CreateFileAsync("new.txt"));
-                }
-                finally
-                {
-                    container.Close();
-                }
+                await Assert.ThrowsAsync<InvalidOperationException>(() => container.Root.CreateFileAsync("new.txt"));
             }
-        }
-
-        [Theory]
-        [MemberData(nameof(WritableFixtures))]
-        public async Task CreateFileAsync_AfterDisablingIsWritableAgain_ThrowsInvalidOperationException(TestContainers.ContainerFixture fixture)
-        {
-            var (copy, container) = await OpenWritableCopyAsync(fixture);
-            using (copy)
+            finally
             {
-                try
-                {
-                    container.IsWritable = false;
-                    await Assert.ThrowsAsync<InvalidOperationException>(() => container.Root.CreateFileAsync("new.txt"));
-                }
-                finally
-                {
-                    container.Close();
-                }
+                container.Close();
             }
         }
 
@@ -630,14 +606,13 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             using var copy = new TemporaryContainerCopy(fixture.ContainerFile);
 
             var writable = await VeraCryptContainer.OpenAsync(
-                copy.File, fixture.Password, fixture.Algorithm, fixture.HashAlgorithm, fixture.FilesystemType,
-                accessMode: ContainerAccessMode.ReadWrite);
-            writable.IsWritable = true;
+                copy.File, fixture.Password,
+                new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, AccessMode = ContainerAccessMode.ReadWrite });
             await writable.Root.CreateFileAsync("persisted.txt", new MemoryStream(Encoding.UTF8.GetBytes("still here")));
             writable.Close();
 
             var reopened = await VeraCryptContainer.OpenAsync(
-                copy.File, fixture.Password, fixture.Algorithm, fixture.HashAlgorithm, fixture.FilesystemType);
+                copy.File, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm });
             try
             {
                 var file = await reopened.Root.GetFileAsync("persisted.txt");

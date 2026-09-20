@@ -18,13 +18,6 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
     /// PIM's format, since it must be a number - opening the container is still where a wrong
     /// combination (including a wrongly-guessed algorithm or hash) is actually reported.
     /// </summary>
-    /// <remarks>
-    /// Also reused, via <paramref name="requireAlgorithmAndHash"/> below, as the "current
-    /// credentials" step of the Change Password flow: <c>VeraCryptContainer.ChangePasswordAsync</c>
-    /// has no auto-detecting overload (deliberately - see its own remarks), so that mode removes the
-    /// "Unspecified" choice from both combo boxes, forcing a real selection, and hides the write-access
-    /// checkbox, which has no meaning there.
-    /// </remarks>
     public partial class CredentialsDialog : Window
     {
         private readonly ObservableCollection<FileInfo> _keyFiles = new ObservableCollection<FileInfo>();
@@ -48,37 +41,21 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             public override string ToString() => Display;
         }
 
-        public CredentialsDialog(bool requireAlgorithmAndHash = false)
+        public CredentialsDialog()
         {
             InitializeComponent();
             Loaded += (_, _) => PasswordBoxControl.Focus();
             KeyFilesListBox.ItemsSource = _keyFiles;
 
-            var algorithmOptions = new List<AlgorithmOption<CryptoAlgorithm>>();
-            if (!requireAlgorithmAndHash)
-            {
-                algorithmOptions.Add(new AlgorithmOption<CryptoAlgorithm>("Unspecified", null));
-            }
+            var algorithmOptions = new List<AlgorithmOption<CryptoAlgorithm>> { new AlgorithmOption<CryptoAlgorithm>("Unspecified", null) };
             algorithmOptions.AddRange(Enum.GetValues<CryptoAlgorithm>().Select(a => new AlgorithmOption<CryptoAlgorithm>(a.ToString(), a)));
             AlgorithmComboBox.ItemsSource = algorithmOptions;
             AlgorithmComboBox.SelectedIndex = 0;
 
-            var hashAlgorithmOptions = new List<AlgorithmOption<HashAlgorithm>>();
-            if (!requireAlgorithmAndHash)
-            {
-                hashAlgorithmOptions.Add(new AlgorithmOption<HashAlgorithm>("Unspecified", null));
-            }
+            var hashAlgorithmOptions = new List<AlgorithmOption<HashAlgorithm>> { new AlgorithmOption<HashAlgorithm>("Unspecified", null) };
             hashAlgorithmOptions.AddRange(Enum.GetValues<HashAlgorithm>().Select(h => new AlgorithmOption<HashAlgorithm>(h.ToString(), h)));
             HashAlgorithmComboBox.ItemsSource = hashAlgorithmOptions;
             HashAlgorithmComboBox.SelectedIndex = 0;
-
-            if (requireAlgorithmAndHash)
-            {
-                Title = "Current Container Credentials";
-                AlgorithmLabel.Text = "Encryption algorithm:";
-                HashAlgorithmLabel.Text = "Hash algorithm:";
-                EnableWriteAccessCheckBox.Visibility = Visibility.Collapsed;
-            }
         }
 
         public string Password => PasswordBoxControl.Password;

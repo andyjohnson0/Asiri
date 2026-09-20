@@ -12,12 +12,14 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
     /// <summary>
     /// Modal dialog prompting for everything needed to create a brand new VeraCrypt container via
     /// <see cref="VeraCryptContainer.CreateAsync"/>: size, filesystem type, an optional volume label,
-    /// the password, an optional PIM, optional keyfiles, and the encryption/hash algorithm to protect
-    /// it with. Unlike <see cref="CredentialsDialog"/>, the algorithm and hash choices are never
-    /// "Unspecified" here - creating a container always requires a real, explicit choice, the same way
-    /// the "current credentials" step of the Change Password flow does - and there is no write-access
-    /// checkbox, since a freshly created container is always opened for write access (see
-    /// MainWindow's own handler for how writing is then armed).
+    /// whether to enable write access, the password, an optional PIM, optional keyfiles, and the
+    /// encryption/hash algorithm to protect it with. Unlike <see cref="CredentialsDialog"/>, the
+    /// algorithm and hash choices are never "Unspecified" here - creating a container always requires
+    /// a real, explicit choice, the same way the "current credentials" step of the Change Credentials
+    /// flow does - but the write-access checkbox itself defaults to checked, unlike
+    /// <see cref="CredentialsDialog"/>'s own: a container you just created is, in every realistic
+    /// case, about to be populated immediately, matching <c>CreateOptions.AccessMode</c>'s own
+    /// default.
     /// </summary>
     public partial class NewContainerDialog : Window
     {
@@ -55,6 +57,9 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 
         /// <summary>Null - meaning no label - if left blank.</summary>
         public string? Label { get; private set; }
+
+        public ContainerAccessMode AccessMode =>
+            EnableWriteAccessCheckBox.IsChecked == true ? ContainerAccessMode.ReadWrite : ContainerAccessMode.ReadOnly;
 
         public string Password => PasswordBoxControl.Password;
 

@@ -7,14 +7,14 @@ using uk.andyjohnson.Asiri.Core;
 namespace uk.andyjohnson.Asiri.Core.Tests
 {
     /// <summary>
-    /// Tests for the password-only <see cref="VeraCryptContainer.OpenAsync(FileInfo, string, System.Threading.CancellationToken)"/>
-    /// overload: searching for the correct (CryptoAlgorithm, HashAlgorithm) combination and
-    /// detecting the filesystem type automatically, without the caller specifying either - matching
-    /// how VeraCrypt itself mounts a volume. Content correctness once opened is already covered by
-    /// ContainerContentTests.cs via the explicit-parameters overload; these tests focus on the
-    /// detection behaviour itself. Both OpenAsync overloads are declared <c>async</c>, so all
-    /// exceptions - including argument-null checks - are deferred onto the returned Task rather than
-    /// thrown synchronously; every test here uses Assert.ThrowsAsync accordingly.
+    /// Tests for <see cref="VeraCryptContainer.OpenAsync"/>'s auto-detection: searching for the
+    /// correct (CryptoAlgorithm, HashAlgorithm) combination and detecting the filesystem type
+    /// automatically, when <see cref="OpenOptions.Algorithm"/>/<see cref="OpenOptions.HashAlgorithm"/>
+    /// aren't given - matching how VeraCrypt itself mounts a volume. Content correctness once opened
+    /// is already covered by ContainerContentTests.cs, which supplies both explicitly; these tests
+    /// focus on the detection behaviour itself. OpenAsync is declared <c>async</c>, so all exceptions
+    /// - including argument-null checks - are deferred onto the returned Task rather than thrown
+    /// synchronously; every test here uses Assert.ThrowsAsync accordingly.
     /// </summary>
     public class PasswordOnlyOpenAsyncTests
     {
@@ -91,7 +91,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         public async Task OpenAsync_WithKnownAlgorithm_SearchesOnlyHashAndFindsCorrectContainer()
         {
             var fixture = TestContainers.AesWhirlpoolExFat;
-            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, algo: fixture.Algorithm);
+            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm });
             try
             {
                 Assert.Equal(fixture.Algorithm, container.Algorithm);
@@ -114,7 +114,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         public async Task OpenAsync_WithKnownHashAlgorithm_SearchesOnlyAlgorithmAndFindsCorrectContainer()
         {
             var fixture = TestContainers.CamelliaSerpentExFat;
-            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, hashAlgo: fixture.HashAlgorithm);
+            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { HashAlgorithm = fixture.HashAlgorithm });
             try
             {
                 Assert.Equal(fixture.Algorithm, container.Algorithm);
@@ -135,7 +135,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         {
             var fixture = TestContainers.AesNtfs;
             var container = await VeraCryptContainer.OpenAsync(
-                fixture.ContainerFile, fixture.Password, algo: fixture.Algorithm, hashAlgo: fixture.HashAlgorithm);
+                fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm });
             try
             {
                 Assert.Equal(fixture.Algorithm, container.Algorithm);
@@ -159,7 +159,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         {
             var fixture = TestContainers.AesNtfs;
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, algo: CryptoAlgorithm.Serpent));
+                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = CryptoAlgorithm.Serpent }));
         }
 
         [Trait("Category", "Integration")]
@@ -168,21 +168,21 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         {
             var fixture = TestContainers.AesNtfs;
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, hashAlgo: HashAlgorithm.Whirlpool));
+                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { HashAlgorithm = HashAlgorithm.Whirlpool }));
         }
 
         [Fact]
         public async Task OpenAsync_UnsupportedKnownAlgorithm_ThrowsArgumentException()
         {
             await Assert.ThrowsAsync<ArgumentException>(() =>
-                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, TestContainers.AesNtfs.Password, algo: (CryptoAlgorithm)99));
+                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, TestContainers.AesNtfs.Password, new OpenOptions { Algorithm = (CryptoAlgorithm)99 }));
         }
 
         [Fact]
         public async Task OpenAsync_UnsupportedKnownHashAlgorithm_ThrowsArgumentException()
         {
             await Assert.ThrowsAsync<ArgumentException>(() =>
-                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, TestContainers.AesNtfs.Password, hashAlgo: (HashAlgorithm)99));
+                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, TestContainers.AesNtfs.Password, new OpenOptions { HashAlgorithm = (HashAlgorithm)99 }));
         }
 
         /// <summary>
@@ -202,17 +202,19 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         }
 
         [Fact]
-        public async Task OpenAsync_NonExistentFile_ThrowsInvalidOperationException_NotMisreportedAsWrongPassword()
+        public async Task OpenAsync_NonExistentFile_ThrowsArgumentException_NotMisreportedAsWrongPassword()
         {
-            // Confirms the motivating design point for the DetectHeaderAsync refactor: a genuine I/O
-            // failure must not be masked as "this combination didn't validate" after exhausting the
-            // (CryptoAlgorithm, HashAlgorithm) search.
+            // Confirms the motivating design point for the DetectHeaderAsync refactor: a genuine
+            // missing-file failure must not be masked as "this combination didn't validate" after
+            // exhausting the (CryptoAlgorithm, HashAlgorithm) search - and, matching
+            // HeaderParser.ParseAsync's own explicit existence check, is reported as an ArgumentException,
+            // not a generic I/O failure.
             var missing = new FileInfo(Path.Combine(TestContainers.AesNtfs.ContainerFile.DirectoryName!, "does-not-exist.hc"));
 
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
                 VeraCryptContainer.OpenAsync(missing, "irrelevant"));
 
-            Assert.Contains("Unable to open container file", exception.Message);
+            Assert.Contains("not found", exception.Message);
         }
 
         [Fact]

@@ -13,7 +13,7 @@ namespace uk.andyjohnson.Asiri.Core
 {
     /// <summary>
     /// Reads and decrypts the volume header of a VeraCrypt file container - and, for
-    /// <see cref="VeraCryptContainer.ChangePasswordAsync"/>, rebuilds one under a new set of
+    /// <see cref="VeraCryptContainer.ChangeCredentialsAsync"/>, rebuilds one under a new set of
     /// credentials.
     /// </summary>
     public static class HeaderParser
@@ -29,8 +29,8 @@ namespace uk.andyjohnson.Asiri.Core
         /// The size, in bytes, of a single header region (the 64-byte salt followed by the 448-byte
         /// encrypted header), as read directly from a container file at either the primary or backup
         /// header offset. Callers building their own multi-algorithm search over
-        /// <see cref="TryDecryptRegionAsync"/> (see <see cref="VeraCryptContainer.OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, ContainerAccessMode, CancellationToken)"/>
-        /// for VeraCryptContainer's own use of this) read exactly this many bytes.
+        /// <see cref="TryDecryptRegionAsync"/> (see <see cref="VeraCryptContainer.OpenAsync"/> for
+        /// VeraCryptContainer's own use of this) read exactly this many bytes.
         /// </summary>
         public const int HeaderRegionSize = SaltSize + EncryptedHeaderSize;
 
@@ -203,8 +203,8 @@ namespace uk.andyjohnson.Asiri.Core
         /// Returns null - rather than throwing - if the region does not decrypt to a valid header
         /// with this combination, so callers can cheaply try several algorithm combinations against
         /// the same already-read bytes without repeating file I/O or paying exception overhead per
-        /// attempt. See <see cref="VeraCryptContainer.OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, ContainerAccessMode, CancellationToken)"/>
-        /// for the motivating use: searching for the right (algorithm, hash) combination without
+        /// attempt. See <see cref="VeraCryptContainer.OpenAsync"/> for the motivating use: searching
+        /// for the right (algorithm, hash) combination without
         /// re-opening or re-reading the container file for every attempt, and without a genuine I/O
         /// failure being mistaken for "this combination didn't validate".
         /// </summary>
@@ -308,7 +308,7 @@ namespace uk.andyjohnson.Asiri.Core
         /// the master/secondary key and every other header field live unchanged inside that
         /// plaintext, so re-encrypting it under a freshly derived key - with a fresh salt, since
         /// reusing the old one would make the old and new ciphertexts trivially related - is the
-        /// whole operation. See <see cref="VeraCryptContainer.ChangePasswordAsync"/>.
+        /// whole operation. See <see cref="VeraCryptContainer.ChangeCredentialsAsync"/>.
         /// </summary>
         /// <param name="decryptedHeaderBytes">
         /// The existing header's full decrypted body (<see cref="VeraCryptHeader.DecryptedBytes"/>),
@@ -358,7 +358,7 @@ namespace uk.andyjohnson.Asiri.Core
                 cancellationToken.ThrowIfCancellationRequested();
 
                 // A fresh salt per region (primary and backup each get their own, independent call
-                // to this method - see ChangePasswordAsync) - System.Security.Cryptography.RandomNumberGenerator,
+                // to this method - see ChangeCredentialsAsync) - System.Security.Cryptography.RandomNumberGenerator,
                 // not System.Random, since this is genuinely security-sensitive: it feeds directly
                 // into the key that will protect the header going forward.
                 var salt = new byte[SaltSize];
@@ -479,7 +479,7 @@ namespace uk.andyjohnson.Asiri.Core
         /// Searches every <see cref="CryptoAlgorithm"/> in <paramref name="algorithmsByAscendingComponentCount"/>,
         /// for one fixed hash algorithm, against a single already-read header region - the inner
         /// loop of <see cref="VeraCryptContainer"/>'s brute-force search
-        /// (<see cref="VeraCryptContainer.OpenAsync(FileInfo, string, int, IEnumerable{FileInfo}, CryptoAlgorithm?, HashAlgorithm?, ContainerAccessMode, CancellationToken)"/>).
+        /// (<see cref="VeraCryptContainer.OpenAsync"/>).
         ///
         /// Rather than deriving a fresh PBKDF2 key per algorithm (up to 10 full derivations for this
         /// hash alone) or deriving the maximum length any algorithm might need upfront (which wastes

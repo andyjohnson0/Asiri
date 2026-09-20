@@ -10,8 +10,8 @@ namespace uk.andyjohnson.Asiri.Core
     ///   <see cref="VeraCryptContainer.Close"/> - however long the caller holds onto it - fails with a
     ///   clear, typed exception instead of failing deep inside DiscUtils' disposed internals
     ///   (<see cref="ThrowIfClosed"/>);
-    /// - a mutating call fails clearly, before ever reaching DiscUtils, unless writing is both
-    ///   permitted for this container's lifetime and currently armed (<see cref="ThrowIfNotWritable"/>);
+    /// - a mutating call fails clearly, before ever reaching DiscUtils, unless the container was
+    ///   opened with <see cref="ContainerAccessMode.ReadWrite"/> (<see cref="ThrowIfNotWritable"/>);
     /// - every call into the underlying DiscUtils filesystem object - across every entry, on every
     ///   thread - is serialized through one lock (<see cref="Lock"/>), since DiscUtils' filesystem
     ///   implementations report <c>IsThreadSafe = false</c>: two calls into the same instance
@@ -21,26 +21,26 @@ namespace uk.andyjohnson.Asiri.Core
     /// </summary>
     internal sealed class ContainerLifetime
     {
+        /// <param name="maxAccessMode">
+        /// The access this container's underlying file handle was actually opened with - fixed for
+        /// the container's whole session and never reassigned afterwards, hence a constructor
+        /// parameter rather than a settable property.
+        /// </param>
+        public ContainerLifetime(ContainerAccessMode maxAccessMode)
+        {
+            MaxAccessMode = maxAccessMode;
+        }
+
         public bool IsClosed { get; set; }
 
         /// <summary>
-        /// The most permissive access this container's underlying file handle was actually opened
-        /// with - fixed for the container's whole session, set once when it was opened. This is the
-        /// ceiling <see cref="IsWritable"/> can be raised to; it is not itself a live "is writing
-        /// currently allowed" flag.
+        /// The access this container's underlying file handle was actually opened with (see
+        /// <see cref="VeraCryptContainer.AccessMode"/>, the public read-only view of this). This is
+        /// the sole gate on whether a mutating operation is permitted - there is no separate runtime
+        /// arm/disarm switch: opening or creating a container with
+        /// <see cref="ContainerAccessMode.ReadWrite"/> is itself sufficient to permit writing to it.
         /// </summary>
-        public ContainerAccessMode MaxAccessMode { get; set; } = ContainerAccessMode.ReadOnly;
-
-        /// <summary>
-        /// Whether writing is currently armed. Starts false even when <see cref="MaxAccessMode"/> is
-        /// <see cref="ContainerAccessMode.ReadWrite"/> - opening for write access and actually
-        /// permitting a write are two separate, both-required steps, deliberately: an errant code
-        /// path that opens a container read-write when it shouldn't have still can't write anything
-        /// without this also being set. Setting it true when <see cref="MaxAccessMode"/> is
-        /// <see cref="ContainerAccessMode.ReadOnly"/> is rejected - see <see cref="VeraCryptContainer.IsWritable"/>,
-        /// which owns that validation; this property itself is a plain, ungated flag.
-        /// </summary>
-        public bool IsWritable { get; set; }
+        public ContainerAccessMode MaxAccessMode { get; }
 
         /// <summary>
         /// Guards every call into this container's underlying DiscUtils filesystem object, across
@@ -64,11 +64,11 @@ namespace uk.andyjohnson.Asiri.Core
 
         public void ThrowIfNotWritable()
         {
-            if (!IsWritable)
+            if (MaxAccessMode != ContainerAccessMode.ReadWrite)
             {
                 throw new InvalidOperationException(
-                    "The container is not currently open for writing. Open it with ContainerAccessMode.ReadWrite " +
-                    "and set VeraCryptContainer.IsWritable to true before attempting to modify it.");
+                    "The container is not open for writing. Reopen it with ContainerAccessMode.ReadWrite " +
+                    "before attempting to modify it.");
             }
         }
     }

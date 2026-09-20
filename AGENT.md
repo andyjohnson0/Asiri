@@ -21,16 +21,17 @@ is and isn't supported.
 
 ## Project-wide scope
 - Implement read access to VeraCrypt encrypted file containers.
-- Implement write access to VeraCrypt encrypted file containers - opt-in and off by default (an
-  explicit access-mode-at-open-time plus a separate, explicit runtime arm/disarm switch must both be
-  set before anything can be written), and limited to fixed-size containers: do not implement growing
-  or shrinking a container's size.
-- Implement changing a container's password, keyfiles, PIM, and/or hash algorithm
-  (`VeraCryptContainer.ChangePasswordAsync`) without touching its contents - the master/secondary key
-  never changes, only the header's own encryption key does. The encryption algorithm itself cannot
-  change this way, matching VeraCrypt's own behaviour. Unlike VeraCrypt, do not implement its optional
-  multi-pass anti-forensic overwrite of the old header, and do not preserve the container file's own
-  timestamps - both deliberate scope reductions, not oversights.
+- Implement write access to VeraCrypt encrypted file containers - opt-in and off by default, gated
+  solely by `ContainerAccessMode`, fixed for the whole session by whichever mode the container was
+  opened or created with (no separate runtime arm/disarm switch) - and limited to fixed-size
+  containers: do not implement growing or shrinking a container's size.
+- Implement changing an already-open, `ContainerAccessMode.ReadWrite` container's password,
+  keyfiles, PIM, and/or hash algorithm (`VeraCryptContainer.ChangeCredentialsAsync`) without
+  touching its contents - the master/secondary key never changes, only the header's own encryption
+  key does. The encryption algorithm itself cannot change this way, matching VeraCrypt's own
+  behaviour. Unlike VeraCrypt, do not implement its optional multi-pass anti-forensic overwrite of
+  the old header, and do not preserve the container file's own timestamps - both deliberate scope
+  reductions, not oversights.
 - Do not implement support for encrypted partitions or drives.
 - Do not implement hidden volumes.
 - Supported encryption algorithms: AES, Serpent, Twofish, Camellia, and the cascades AES-Twofish,

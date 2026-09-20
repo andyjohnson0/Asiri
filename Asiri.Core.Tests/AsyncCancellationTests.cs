@@ -30,9 +30,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
                 VeraCryptContainer.OpenAsync(
                     TestContainers.AesNtfs.ContainerFile,
                     TestContainers.AesNtfs.Password,
-                    TestContainers.AesNtfs.Algorithm,
-                    TestContainers.AesNtfs.HashAlgorithm,
-                    TestContainers.AesNtfs.FilesystemType,
+                    new OpenOptions { Algorithm = TestContainers.AesNtfs.Algorithm, HashAlgorithm = TestContainers.AesNtfs.HashAlgorithm },
                     cancellationToken: cts.Token));
         }
 

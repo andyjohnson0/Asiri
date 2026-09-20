@@ -10,17 +10,17 @@ using uk.andyjohnson.Asiri.Core;
 namespace uk.andyjohnson.Asiri.ContainerBrowser
 {
     /// <summary>
-    /// Modal dialog prompting for the "new credentials" half of the Change Password flow: the new
+    /// Modal dialog prompting for the "new credentials" half of the Change Credentials flow: the new
     /// password, an optional new PIM, optional new keyfiles, and - only if the checkbox is ticked -
     /// a different hash algorithm. Unlike <see cref="CredentialsDialog"/>, there is no encryption
-    /// algorithm choice at all here: <c>VeraCryptContainer.ChangePasswordAsync</c> can never change
-    /// it, so there is nothing to ask about.
+    /// algorithm choice at all here: <c>VeraCryptContainer.ChangeCredentialsAsync</c> can never
+    /// change it, so there is nothing to ask about.
     /// </summary>
-    public partial class NewPasswordDialog : Window
+    public partial class ChangeCredentialsDialog : Window
     {
         private readonly ObservableCollection<FileInfo> _keyFiles = new ObservableCollection<FileInfo>();
 
-        public NewPasswordDialog()
+        public ChangeCredentialsDialog()
         {
             InitializeComponent();
             Loaded += (_, _) => NewPasswordBoxControl.Focus();
@@ -38,7 +38,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 
         /// <summary>
         /// Null - meaning "keep the current hash algorithm", the same convention
-        /// <c>ChangePasswordAsync</c>'s own <c>newHashAlgorithm</c> parameter uses - unless
+        /// <see cref="ChangeCredentialsOptions.NewHashAlgorithm"/> uses - unless
         /// <see cref="ChangeHashAlgorithmCheckBox"/> is ticked.
         /// </summary>
         public HashAlgorithm? NewHashAlgorithm =>

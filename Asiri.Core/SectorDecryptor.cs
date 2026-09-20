@@ -473,6 +473,26 @@ namespace uk.andyjohnson.Asiri.Core
         }
 
         /// <summary>
+        /// Writes already-encrypted bytes directly to an arbitrary byte offset in the underlying
+        /// file - used only for rewriting the primary/backup header regions (see
+        /// <see cref="VeraCryptContainer.ChangeCredentialsAsync"/>), which live outside the
+        /// sector-addressable data area this class otherwise exposes and are encrypted under their
+        /// own, separate header key, not this class's data-area AES-XTS. Guarded by the same lock as
+        /// every sector-level read/write, so this can't interleave with one and corrupt the
+        /// underlying stream's position.
+        /// </summary>
+        internal void WriteRawRegion(long offset, byte[] data)
+        {
+            ThrowIfDisposed();
+            ThrowIfNotWritable();
+            lock (_streamLock)
+            {
+                _stream.Seek(offset, SeekOrigin.Begin);
+                _stream.Write(data, 0, data.Length);
+            }
+        }
+
+        /// <summary>
         /// Closes the underlying file handle. Safe to call more than once: only the first call has
         /// any effect.
         /// </summary>

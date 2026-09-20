@@ -8,7 +8,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 {
     /// <summary>
     /// Modal dialog prompting for the output path and format of a
-    /// <see cref="VeraCryptContainer.DumpRawImageAsync"/> export - the currently open container's
+    /// <see cref="VeraCryptContainer.ExportFileSystemAsync"/> export - the currently open container's
     /// decrypted filesystem, written out unencrypted so it can be examined by tools, people, or a
     /// real OS's own mount path entirely outside Asiri.
     /// </summary>
@@ -19,26 +19,26 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             InitializeComponent();
             Loaded += (_, _) => BrowseButton.Focus();
 
-            FormatComboBox.ItemsSource = Enum.GetValues<RawImageExportFormat>();
+            FormatComboBox.ItemsSource = Enum.GetValues<FileSystemExportFormat>();
             FormatComboBox.SelectedIndex = 0;
         }
 
         public FileInfo? OutputPath { get; private set; }
 
-        public RawImageExportFormat Format => (RawImageExportFormat)FormatComboBox.SelectedItem;
+        public FileSystemExportFormat Format => (FileSystemExportFormat)FormatComboBox.SelectedItem;
 
         private void BrowseButton_Click(object sender, RoutedEventArgs e)
         {
             var (filter, defaultExt) = Format switch
             {
-                RawImageExportFormat.Vhd or RawImageExportFormat.VhdWithPartitionTable
+                FileSystemExportFormat.Vhd or FileSystemExportFormat.VhdWithPartitionTable
                     => ("VHD files (*.vhd)|*.vhd|All files (*.*)|*.*", ".vhd"),
                 _ => ("Raw disk images (*.img)|*.img|All files (*.*)|*.*", ".img")
             };
 
             var dialog = new SaveFileDialog
             {
-                Title = "Dump Raw Filesystem Image",
+                Title = "Export Filesystem Image",
                 Filter = filter,
                 DefaultExt = defaultExt
             };

@@ -23,7 +23,6 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
     public partial class MainWindow : Window
     {
         private VeraCryptContainer? _container;
-        private ContainerAccessMode _accessMode;
         private EntryNode? _rootNode;
 
         public MainWindow()
@@ -34,9 +33,10 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 
         /// <summary>
         /// Creates a brand new VeraCrypt container via <see cref="VeraCryptContainer.CreateAsync"/>
-        /// and loads it into the window exactly as <see cref="OpenMenuItem_Click"/> would - a freshly
-        /// created container is empty, so there's no reason to make the user separately arm writing
-        /// before they can start populating it, unlike opening an existing one. Mirrors
+        /// and loads it into the window exactly as <see cref="OpenMenuItem_Click"/> would - writable
+        /// by default (<see cref="NewContainerDialog.AccessMode"/>'s own checkbox defaults to
+        /// checked, matching <c>CreateOptions.AccessMode</c>'s own default), but the user can
+        /// uncheck it to create a read-only container instead. Mirrors
         /// <see cref="OpenMenuItem_Click"/>'s own "one container at a time" gating: this and
         /// <see cref="OpenMenuItem"/> are both disabled once a container is open, and both re-enabled
         /// only by <see cref="CloseMenuItem_Click"/> - creating a second container without closing the
@@ -51,22 +51,6 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             }
 
             var path = newContainerDialog.ContainerPath!;
-            if (path.Exists)
-            {
-                // SaveFileDialog's own standard "Do you want to replace it?" prompt already confirmed
-                // this - CreateAsync itself always refuses to overwrite an existing file, so that
-                // confirmation is honoured here rather than surfacing as a confusing second,
-                // unexplained failure.
-                try
-                {
-                    path.Delete();
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(this, ex.Message, "Unable to replace existing file", MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
-                }
-            }
 
             CreateContainerMenuItem.IsEnabled = false;
             OpenMenuItem.IsEnabled = false;
@@ -78,20 +62,29 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 
             try
             {
-                _accessMode = ContainerAccessMode.ReadWrite;
                 _container = await VeraCryptContainer.CreateAsync(
                     path, newContainerDialog.SizeInBytes, newContainerDialog.Password, newContainerDialog.Algorithm, newContainerDialog.HashAlgorithm,
-                    newContainerDialog.FileSystemType, newContainerDialog.Pim, newContainerDialog.KeyFiles, newContainerDialog.Label, newContainerDialog.ClusterSize,
+                    newContainerDialog.FileSystemType,
+                    new CreateOptions
+                    {
+                        // SaveFileDialog's own standard "Do you want to replace it?" prompt already
+                        // confirmed this, so it's honoured here rather than surfacing as a confusing
+                        // second, unexplained failure.
+                        Overwrite = true,
+                        Pim = newContainerDialog.Pim,
+                        KeyFiles = newContainerDialog.KeyFiles,
+                        Label = newContainerDialog.Label,
+                        ClusterSize = newContainerDialog.ClusterSize,
+                        AccessMode = newContainerDialog.AccessMode
+                    },
                     cancellationTokenSource.Token);
-                _container.IsWritable = true;
 
                 ClearContentPane();
                 await LoadRootAsync(path.Name);
 
                 CloseMenuItem.IsEnabled = true;
                 DumpImageMenuItem.IsEnabled = true;
-                WritingEnabledMenuItem.IsEnabled = true;
-                WritingEnabledMenuItem.IsChecked = true;
+                ChangePasswordMenuItem.IsEnabled = _container.AccessMode == ContainerAccessMode.ReadWrite;
                 UpdateWriteStatusText();
                 StatusText.Text = $"Created: {path.FullName} ({_container.Algorithm} / {_container.HashAlgorithm} / {_container.FileSystemType})";
             }
@@ -141,17 +134,24 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 
             try
             {
-                _accessMode = credentialsDialog.AccessMode;
                 _container = await VeraCryptContainer.OpenAsync(
-                    new FileInfo(openDialog.FileName), credentialsDialog.Password, credentialsDialog.Pim, credentialsDialog.KeyFiles,
-                    credentialsDialog.Algorithm, credentialsDialog.HashAlgorithm, accessMode: _accessMode, cancellationToken: cancellationTokenSource.Token);
+                    new FileInfo(openDialog.FileName), credentialsDialog.Password,
+                    new OpenOptions
+                    {
+                        Pim = credentialsDialog.Pim,
+                        KeyFiles = credentialsDialog.KeyFiles,
+                        Algorithm = credentialsDialog.Algorithm,
+                        HashAlgorithm = credentialsDialog.HashAlgorithm,
+                        AccessMode = credentialsDialog.AccessMode
+                    },
+                    cancellationToken: cancellationTokenSource.Token);
 
                 ClearContentPane();
                 await LoadRootAsync(Path.GetFileName(openDialog.FileName));
 
                 CloseMenuItem.IsEnabled = true;
                 DumpImageMenuItem.IsEnabled = true;
-                WritingEnabledMenuItem.IsEnabled = _accessMode == ContainerAccessMode.ReadWrite;
+                ChangePasswordMenuItem.IsEnabled = _container.AccessMode == ContainerAccessMode.ReadWrite;
                 UpdateWriteStatusText();
                 StatusText.Text = $"Opened: {openDialog.FileName} ({_container.Algorithm} / {_container.HashAlgorithm} / {_container.FileSystemType})";
             }
@@ -185,15 +185,14 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             CreateContainerMenuItem.IsEnabled = true;
             CloseMenuItem.IsEnabled = false;
             DumpImageMenuItem.IsEnabled = false;
-            WritingEnabledMenuItem.IsEnabled = false;
-            WritingEnabledMenuItem.IsChecked = false;
+            ChangePasswordMenuItem.IsEnabled = false;
             StatusText.Text = "No container open.";
             WriteStatusText.Text = string.Empty;
         }
 
         /// <summary>
         /// Exports the currently open container's decrypted filesystem to a plain file via
-        /// <see cref="VeraCryptContainer.DumpRawImageAsync"/>, so it can be examined by a filesystem-
+        /// <see cref="VeraCryptContainer.ExportFileSystemAsync"/>, so it can be examined by a filesystem-
         /// checking tool, another person, a real OS's own mount path, or another AI session entirely
         /// outside Asiri: a way to ask "is this actually a valid filesystem?" using something other
         /// than Asiri's own read path, which - reading back exactly what it itself wrote - can't
@@ -208,7 +207,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             }
 
             using var cancellationTokenSource = new CancellationTokenSource();
-            var progressDialog = new ProgressDialog(cancellationTokenSource, "Dumping raw image...") { Owner = this };
+            var progressDialog = new ProgressDialog(cancellationTokenSource, "Exporting filesystem image...") { Owner = this };
             progressDialog.Show();
             IsEnabled = false;
 
@@ -219,18 +218,18 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
                 // reading" against a write-only handle - confirmed the hard way.
                 using (var destination = dialog.OutputPath!.Open(FileMode.Create, FileAccess.ReadWrite, FileShare.None))
                 {
-                    await _container!.DumpRawImageAsync(destination, dialog.Format, cancellationTokenSource.Token);
+                    await _container!.ExportFileSystemAsync(destination, dialog.Format, cancellationTokenSource.Token);
                 }
 
-                MessageBox.Show(this, $"The raw image has been written to {dialog.OutputPath!.FullName}.", "Dump Raw Image", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(this, $"The filesystem image has been written to {dialog.OutputPath!.FullName}.", "Export Filesystem Image", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (OperationCanceledException)
             {
-                StatusText.Text = "Dump cancelled.";
+                StatusText.Text = "Export cancelled.";
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Unable to dump image", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(this, ex.Message, "Unable to export filesystem image", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {
@@ -245,63 +244,48 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
         }
 
         /// <summary>
-        /// Changes a container's password, keyfiles, PIM, and/or hash algorithm via
-        /// <see cref="VeraCryptContainer.ChangePasswordAsync"/> - a standalone operation on the file
-        /// the user picks, not on whatever container (if any) is currently open in this window: that
-        /// method is static and never touches the filesystem region, so it never needs one open. If
-        /// the same file IS currently open elsewhere, the attempt fails cleanly with a sharing
-        /// violation (wrapped in a descriptive message by ChangePasswordAsync itself) rather than
-        /// this window pre-emptively guessing whether that's the case.
+        /// Changes the currently open container's password, keyfiles, PIM, and/or hash algorithm via
+        /// <see cref="VeraCryptContainer.ChangeCredentialsAsync"/> - an instance method, unlike the
+        /// static method it replaces, since having opened the container with
+        /// <see cref="ContainerAccessMode.ReadWrite"/> is itself the proof the caller knows the
+        /// current credentials; there is nothing left to re-collect here beyond the new ones. Only
+        /// enabled while such a container is open (see <see cref="ChangePasswordMenuItem"/>'s own
+        /// <c>IsEnabled</c> wiring alongside Open/Create/Close).
         /// </summary>
         private async void ChangePasswordMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            var openDialog = new OpenFileDialog
-            {
-                Title = "Change Container Password",
-                Filter = "VeraCrypt containers (*.hc)|*.hc|All files (*.*)|*.*"
-            };
-            if (openDialog.ShowDialog(this) != true)
-            {
-                return;
-            }
-
-            // requireAlgorithmAndHash: true - ChangePasswordAsync has no auto-detecting overload, so
-            // both must be known and explicitly chosen here, unlike the ordinary Open flow.
-            var oldCredentialsDialog = new CredentialsDialog(requireAlgorithmAndHash: true) { Owner = this };
-            if (oldCredentialsDialog.ShowDialog() != true)
-            {
-                return;
-            }
-
-            var newCredentialsDialog = new NewPasswordDialog { Owner = this };
+            var newCredentialsDialog = new ChangeCredentialsDialog { Owner = this };
             if (newCredentialsDialog.ShowDialog() != true)
             {
                 return;
             }
 
             using var cancellationTokenSource = new CancellationTokenSource();
-            var progressDialog = new ProgressDialog(cancellationTokenSource, "Changing password...") { Owner = this };
+            var progressDialog = new ProgressDialog(cancellationTokenSource, "Changing credentials...") { Owner = this };
             progressDialog.Show();
             IsEnabled = false;
 
             try
             {
-                await VeraCryptContainer.ChangePasswordAsync(
-                    new FileInfo(openDialog.FileName),
-                    oldCredentialsDialog.Password, oldCredentialsDialog.Algorithm!.Value, oldCredentialsDialog.HashAlgorithm!.Value,
-                    oldCredentialsDialog.Pim, oldCredentialsDialog.KeyFiles,
-                    newCredentialsDialog.NewPassword, newCredentialsDialog.NewPim, newCredentialsDialog.NewKeyFiles, newCredentialsDialog.NewHashAlgorithm,
+                await _container!.ChangeCredentialsAsync(
+                    newCredentialsDialog.NewPassword,
+                    new ChangeCredentialsOptions
+                    {
+                        NewPim = newCredentialsDialog.NewPim,
+                        NewKeyFiles = newCredentialsDialog.NewKeyFiles,
+                        NewHashAlgorithm = newCredentialsDialog.NewHashAlgorithm
+                    },
                     cancellationTokenSource.Token);
 
-                MessageBox.Show(this, "The container's password has been changed.", "Change Password", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(this, "The container's credentials have been changed.", "Change Credentials", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (OperationCanceledException)
             {
-                StatusText.Text = "Change password cancelled.";
+                StatusText.Text = "Change credentials cancelled.";
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Unable to change password", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(this, ex.Message, "Unable to change credentials", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {
@@ -310,26 +294,11 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             }
         }
 
-        private void WritingEnabledMenuItem_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                _container!.IsWritable = WritingEnabledMenuItem.IsChecked;
-            }
-            catch (Exception ex)
-            {
-                WritingEnabledMenuItem.IsChecked = _container!.IsWritable;
-                MessageBox.Show(this, ex.Message, "Unable to change writing state", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-
-            UpdateWriteStatusText();
-        }
-
         private void UpdateWriteStatusText()
         {
             WriteStatusText.Text = _container == null
                 ? string.Empty
-                : _container.IsWritable ? "Writing enabled" : _accessMode == ContainerAccessMode.ReadWrite ? "Writing disabled" : "Read-only";
+                : _container.AccessMode == ContainerAccessMode.ReadWrite ? "Writing enabled" : "Read-only";
         }
 
         /// <summary>
@@ -408,11 +377,11 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 
         /// <summary>
         /// Starts a drag once the mouse has moved far enough with the button held. A directory node
-        /// can only be dragged to move it within the container, which needs writing armed. A file
-        /// node can always be dragged - regardless of whether writing is armed - since dragging it
-        /// out to another application (Explorer, say) to export a copy doesn't touch the container at
-        /// all; only dropping it back inside our own tree as a move does, and that drop is re-checked
-        /// against <see cref="VeraCryptContainer.IsWritable"/> independently in <see cref="GetDropTargetNode"/>.
+        /// can only be dragged to move it within the container, which needs write access. A file
+        /// node can always be dragged - regardless of write access - since dragging it out to another
+        /// application (Explorer, say) to export a copy doesn't touch the container at all; only
+        /// dropping it back inside our own tree as a move does, and that drop is re-checked against
+        /// <see cref="VeraCryptContainer.AccessMode"/> independently in <see cref="GetDropTargetNode"/>.
         /// </summary>
         /// <remarks>
         /// PreviewMouseMove tunnels: for a mouse over a nested item, this fires first on every
@@ -449,7 +418,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
                 return;
             }
 
-            if (node.IsDirectory && _container?.IsWritable != true)
+            if (node.IsDirectory && _container?.AccessMode != ContainerAccessMode.ReadWrite)
             {
                 return;
             }
@@ -532,7 +501,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
         /// </summary>
         private EntryNode? GetDropTargetNode(DragEventArgs e)
         {
-            if (_container?.IsWritable != true || _rootNode == null)
+            if (_container?.AccessMode != ContainerAccessMode.ReadWrite || _rootNode == null)
             {
                 return null;
             }
@@ -623,7 +592,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 
         private void SetContextMenuItemsEnabled(ContextMenu menu)
         {
-            var writable = _container?.IsWritable == true;
+            var writable = _container?.AccessMode == ContainerAccessMode.ReadWrite;
             foreach (var menuItem in menu.Items.OfType<MenuItem>())
             {
                 menuItem.IsEnabled = menuItem.Tag switch
@@ -876,16 +845,16 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
         }
 
         /// <summary>
-        /// Viewing properties is always available, regardless of whether writing is armed - it's a
-        /// read, not a mutation - so <see cref="EntryPropertiesDialog"/> is opened read-only (no
-        /// editable fields, no attempt to save) whenever it isn't. The decision is made here, from
-        /// the actual current <see cref="VeraCryptContainer.IsWritable"/> state, rather than trusted
-        /// to whatever the context menu happened to show at the time it was opened.
+        /// Viewing properties is always available, regardless of write access - it's a read, not a
+        /// mutation - so <see cref="EntryPropertiesDialog"/> is opened read-only (no editable fields,
+        /// no attempt to save) whenever it isn't. The decision is made here, from the actual current
+        /// <see cref="VeraCryptContainer.AccessMode"/>, rather than trusted to whatever the context
+        /// menu happened to show at the time it was opened.
         /// </summary>
         private async void EditProperties_Click(object sender, RoutedEventArgs e)
         {
             var node = GetContextNode(sender);
-            var readOnly = _container?.IsWritable != true;
+            var readOnly = _container?.AccessMode != ContainerAccessMode.ReadWrite;
             try
             {
                 var attributes = await node.Entry.GetAttributesAsync();

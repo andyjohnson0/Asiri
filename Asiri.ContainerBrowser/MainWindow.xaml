@@ -112,20 +112,17 @@
                         <svgc:SvgViewbox Source="Icons/x-circle.svg" Width="16" Height="16"/>
                     </MenuItem.Icon>
                 </MenuItem>
-                <MenuItem x:Name="DumpImageMenuItem" Header="_Dump Raw Image..." Click="DumpImageMenuItem_Click" IsEnabled="False">
+                <MenuItem x:Name="DumpImageMenuItem" Header="_Export Filesystem Image..." Click="DumpImageMenuItem_Click" IsEnabled="False">
                     <MenuItem.Icon>
                         <svgc:SvgViewbox Source="Icons/file-earmark-arrow-down.svg" Width="16" Height="16"/>
                     </MenuItem.Icon>
                 </MenuItem>
                 <Separator/>
-                <MenuItem Header="Change _Password..." Click="ChangePasswordMenuItem_Click">
+                <MenuItem x:Name="ChangePasswordMenuItem" Header="Change _Credentials..." Click="ChangePasswordMenuItem_Click" IsEnabled="False">
                     <MenuItem.Icon>
                         <svgc:SvgViewbox Source="Icons/key.svg" Width="16" Height="16"/>
                     </MenuItem.Icon>
                 </MenuItem>
-                <Separator/>
-                <MenuItem x:Name="WritingEnabledMenuItem" Header="Enable _Writing" IsCheckable="True"
-                          IsEnabled="False" Click="WritingEnabledMenuItem_Click"/>
                 <Separator/>
                 <MenuItem Header="E_xit" Click="ExitMenuItem_Click"/>
             </MenuItem>
