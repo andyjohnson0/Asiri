@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>uk.andyjohnson.Asiri.Diagnostics</RootNamespace>
+    <Description>
+      Standalone diagnostic tool: not part of the Asiri library or its public API. Compares what
+      Asiri.Core decrypts from a container's data area against what a real, already-mounted
+      VeraCrypt exposes for the same container, to determine whether a "VeraCrypt mounts it but
+      Windows won't read it" failure is a decryption mismatch or something downstream of decryption.
+    </Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Asiri.Core\Asiri.Core.csproj" />
+  </ItemGroup>
+
+</Project>

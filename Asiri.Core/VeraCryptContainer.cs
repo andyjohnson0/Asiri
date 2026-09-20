@@ -2,13 +2,18 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using DiscUtils;
 using DiscUtils.ExFat;
+using DiscUtils.ExFat.Internal;
+using DiscUtils.ExFat.Internal.Filesystem;
 using DiscUtils.Fat;
 using DiscUtils.Ntfs;
+using DiscUtils.Partitions;
+using DiscUtils.Vhd;
 using uk.andyjohnson.Asiri.Abstractions;
 using uk.andyjohnson.Asiri.Core.Crypto;
 using uk.andyjohnson.Asiri.Core.Filesystem.ExFat;
@@ -114,6 +119,47 @@ namespace uk.andyjohnson.Asiri.Core
         /// written until <see cref="VeraCryptContainer.IsWritable"/> is also explicitly set to true.
         /// </summary>
         ReadWrite
+    }
+
+    /// <summary>
+    /// The output format for <see cref="VeraCryptContainer.DumpRawImageAsync"/> - a diagnostic export
+    /// of a container's decrypted filesystem, for handing to a tool, person, or AI session entirely
+    /// outside Asiri (see that method's own remarks for why).
+    /// </summary>
+    public enum RawImageExportFormat
+    {
+        /// <summary>
+        /// The whole decrypted filesystem, written as a bare sequence of bytes with no wrapper of any
+        /// kind - exactly what DiscUtils formatted and reads from, nothing added or removed.
+        /// </summary>
+        RawImage,
+
+        /// <summary>
+        /// Only the first 512 bytes (the volume's boot sector) of the decrypted filesystem, as a bare
+        /// sequence of bytes - a cheap way to eyeball just that, for the same reason
+        /// <see cref="VeraCryptContainer.DetectFileSystemTypeAsync"/> only ever looks there itself.
+        /// </summary>
+        RawImageBootSectorOnly,
+
+        /// <summary>
+        /// The whole decrypted filesystem, wrapped in a fixed-size VHD with no partition table - a
+        /// single, unpartitioned "superfloppy"-style virtual disk whose own first sector is the
+        /// filesystem's boot sector, matching exactly how the filesystem is laid out inside the real
+        /// encrypted container. Windows can mount a VHD natively (no VeraCrypt, no Asiri involved at
+        /// all), which is the point: it lets the exported filesystem be tested for real-OS validity
+        /// completely independently of everything else in Asiri's own pipeline.
+        /// </summary>
+        Vhd,
+
+        /// <summary>
+        /// The same idea as <see cref="Vhd"/>, but with a single MBR partition (of the appropriate
+        /// type for the container's own <see cref="VeraCryptContainer.FileSystemType"/>) wrapped
+        /// around the filesystem, rather than placing it directly at the start of the disk. Exists
+        /// alongside <see cref="Vhd"/> specifically to separate two variables while diagnosing why a
+        /// real OS doesn't recognise a container's filesystem: whether the filesystem's own content is
+        /// at fault, or whether a partitioned-vs-unpartitioned disk layout is.
+        /// </summary>
+        VhdWithPartitionTable
     }
 
 
@@ -355,6 +401,486 @@ namespace uk.andyjohnson.Asiri.Core
         }
 
         /// <summary>
+        /// The sector size, in bytes, used for every container this creates. Matches VeraCrypt's own
+        /// default for non-boot volumes, and every one of Asiri's own real-VeraCrypt-created test
+        /// fixtures - not exposed as a caller choice, since there is no reason for Asiri itself to
+        /// create a container with a different sector size.
+        /// </summary>
+        private const int DefaultSectorSize = 512;
+
+        /// <summary>
+        /// Creates a brand new VeraCrypt container file: a freshly formatted, empty filesystem,
+        /// protected by a freshly generated master key, encrypted under the given credentials.
+        /// </summary>
+        /// <remarks>
+        /// Verified against VeraCrypt's own source (Common/Format.c's <c>TCFormatVolume</c> and
+        /// Common/Volumes.c's <c>CreateVolumeHeaderInMemory</c>), not assumed: <paramref name="size"/>
+        /// is the container's TOTAL FILE SIZE, matching VeraCrypt's own creation-dialog convention -
+        /// not the size of the filesystem inside it. VeraCrypt reserves a fixed 256 KiB of that for
+        /// headers (see <see cref="HeaderParser.TotalHeaderOverheadSize"/>); the filesystem itself
+        /// gets whatever remains. <paramref name="size"/> must exceed that overhead - by however much
+        /// <paramref name="fileSystemType"/> itself needs on top, which this method does not attempt
+        /// to duplicate: it lets the underlying DiscUtils formatter reject a too-small request on its
+        /// own, wrapped in a clearer message, rather than replicating VeraCrypt's own per-filesystem
+        /// minimum-size table.
+        ///
+        /// Returns an already-open container, but - exactly like
+        /// <see cref="OpenAsync(FileInfo, string, CryptoAlgorithm, HashAlgorithm, FileSystemType, int, IEnumerable{FileInfo}, ContainerAccessMode, CancellationToken)"/> -
+        /// not yet writable: <see cref="IsWritable"/> must still be explicitly set to true before
+        /// anything can be written to it, even though it was just created and starts out empty. This
+        /// keeps "was this container just created" and "am I currently allowed to write to it"
+        /// orthogonal, rather than special-casing creation.
+        ///
+        /// If any step fails after the container file has already been created on disk, that
+        /// partially-written file is deleted, rather than left behind looking like a real container
+        /// while actually being a corrupt, half-formed one.
+        /// </remarks>
+        /// <param name="path">Path to the new container file. Must not already exist.</param>
+        /// <param name="size">The container's total file size, in bytes - see the remarks above.</param>
+        /// <param name="password">The new container's password.</param>
+        /// <param name="algorithm">The encryption algorithm to protect the container with.</param>
+        /// <param name="hashAlgorithm">The hash algorithm to derive keys from the password with.</param>
+        /// <param name="fileSystemType">The filesystem to format the container's data area with.</param>
+        /// <param name="pim">The container's PIM (Personal Iterations Multiplier), or 0 for the default.</param>
+        /// <param name="keyFiles">Keyfiles to mix into the password, in order, or null for none.</param>
+        /// <param name="label">A volume label for the new filesystem, or null - the default - for none.</param>
+        /// <param name="clusterSize">
+        /// The filesystem's cluster size in bytes, or null - the default. Only meaningful for
+        /// <see cref="FileSystemType.ExFat"/>: verified against DiscUtils' own source, its NTFS and
+        /// FAT formatters give no way at all to override their own fixed (NTFS - always 4 KiB at this
+        /// library's fixed 512-byte sector size) or size-derived (FAT) cluster size, so a non-null
+        /// value here is rejected for either of those rather than silently ignored. When given, must
+        /// be a positive power of two. For exFAT, null uses a fixed 4 KiB - matching NTFS's own
+        /// cluster size, kept consistent across every filesystem type this method can produce - rather
+        /// than exFAT's own size-tiered default (see <c>DefaultExFatClusterSize</c>).
+        /// </param>
+        /// <param name="cancellationToken">
+        /// A token to cancel the operation. Honoured up until the container file is created on disk;
+        /// not checked again during formatting, since a cancelled format would leave a corrupt file
+        /// that this method would then need to clean up anyway - see the remarks above.
+        /// </param>
+        /// <returns>A container whose <see cref="Root"/> exposes the newly formatted, empty filesystem.</returns>
+        public static Task<VeraCryptContainer> CreateAsync(
+            FileInfo path,
+            long size,
+            string password,
+            CryptoAlgorithm algorithm,
+            HashAlgorithm hashAlgorithm,
+            FileSystemType fileSystemType,
+            int pim = 0,
+            IEnumerable<FileInfo> keyFiles = null,
+            string label = null,
+            int? clusterSize = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (path == null)
+            {
+                throw new ArgumentNullException(nameof(path));
+            }
+            if (password == null)
+            {
+                throw new ArgumentNullException(nameof(password));
+            }
+            if (!CascadeDefinitions.IsSupported(algorithm))
+            {
+                throw new ArgumentException($"Unsupported encryption algorithm: {algorithm}.", nameof(algorithm));
+            }
+            if (!SupportedHashAlgorithms.Contains(hashAlgorithm))
+            {
+                throw new ArgumentException($"Unsupported hash algorithm: {hashAlgorithm}.", nameof(hashAlgorithm));
+            }
+            switch (fileSystemType)
+            {
+                case FileSystemType.Ntfs:
+                case FileSystemType.Fat:
+                case FileSystemType.ExFat:
+                    break;
+                default:
+                    throw new ArgumentException($"Unsupported filesystem type: {fileSystemType}.", nameof(fileSystemType));
+            }
+            if (pim < 0)
+            {
+                throw new ArgumentException($"PIM must not be negative: {pim}.", nameof(pim));
+            }
+            if (size <= HeaderParser.TotalHeaderOverheadSize)
+            {
+                throw new ArgumentException(
+                    $"Size must be greater than {HeaderParser.TotalHeaderOverheadSize} bytes (VeraCrypt's fixed " +
+                    "header overhead), plus whatever the chosen filesystem itself needs on top.", nameof(size));
+            }
+            if (path.Exists)
+            {
+                throw new ArgumentException($"A file already exists at this path: {path.FullName}.", nameof(path));
+            }
+            if (clusterSize.HasValue)
+            {
+                if (fileSystemType != FileSystemType.ExFat)
+                {
+                    throw new ArgumentException(
+                        $"A specific cluster size can only be requested for exFAT; DiscUtils' {fileSystemType} " +
+                        "formatter provides no way to override its own cluster size.", nameof(clusterSize));
+                }
+                if (clusterSize.Value < DefaultSectorSize || (clusterSize.Value & (clusterSize.Value - 1)) != 0)
+                {
+                    throw new ArgumentException(
+                        $"Cluster size must be a power of two of at least {DefaultSectorSize} bytes (this library's " +
+                        $"fixed sector size): {clusterSize.Value}.", nameof(clusterSize));
+                }
+            }
+
+            return CreateAsyncCore(path, size, password, algorithm, hashAlgorithm, fileSystemType, pim, keyFiles, label, clusterSize, cancellationToken);
+        }
+
+        private static async Task<VeraCryptContainer> CreateAsyncCore(
+            FileInfo path, long size, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm,
+            FileSystemType fileSystemType, int pim, IEnumerable<FileInfo> keyFiles, string label, int? clusterSize, CancellationToken cancellationToken)
+        {
+            var dataAreaSize = size - HeaderParser.TotalHeaderOverheadSize;
+
+            var (masterKey, secondaryKey) = HeaderParser.GenerateMasterKeys(algorithm);
+            var plaintextHeader = HeaderParser.BuildNewHeaderPlaintext(dataAreaSize, DefaultSectorSize, masterKey, secondaryKey);
+
+            // Each header location gets its own independent salt, matching ChangePasswordAsync and,
+            // ultimately, VeraCrypt's own behaviour - it never writes the same encrypted bytes to both
+            // header locations, even when the plaintext they encrypt is identical.
+            var primaryRegion = await HeaderParser.BuildHeaderRegionAsync(
+                plaintextHeader, algorithm, hashAlgorithm, password, pim, keyFiles, cancellationToken).ConfigureAwait(false);
+            var backupRegion = await HeaderParser.BuildHeaderRegionAsync(
+                plaintextHeader, algorithm, hashAlgorithm, password, pim, keyFiles, cancellationToken).ConfigureAwait(false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                await CreateContainerFileAsync(path, size, primaryRegion, backupRegion, cancellationToken).ConfigureAwait(false);
+                // FileInfo caches Exists (and other metadata) as of when it was last queried -
+                // SectorDecryptor.CreateAsync's own Exists check would otherwise still see the false
+                // result path.Exists returned earlier in CreateAsync, before this method created the
+                // file, and reject a container that genuinely exists on disk.
+                path.Refresh();
+
+                var header = new VeraCryptHeader
+                {
+                    Algorithm = algorithm,
+                    HashAlgorithm = hashAlgorithm,
+                    Magic = "VERA",
+                    Version = 5,
+                    HiddenVolumeSize = 0,
+                    VolumeSize = dataAreaSize,
+                    MasterKeyScopeOffset = HeaderParser.DataAreaOffset,
+                    EncryptedAreaSize = dataAreaSize,
+                    Flags = 0,
+                    SectorSize = DefaultSectorSize,
+                    MasterKey = masterKey,
+                    SecondaryKey = secondaryKey,
+                    CrcValid = true,
+                    FromBackup = false,
+                    DecryptedBytes = plaintextHeader
+                };
+
+                var decryptor = await SectorDecryptor.CreateAsync(path, header, canWrite: true, cancellationToken).ConfigureAwait(false);
+                var stream = new DecryptedBlockDeviceStream(decryptor);
+
+                try
+                {
+                    // Must happen before formatting, not after: a filesystem formatter only ever
+                    // writes its own metadata (boot sector, MFT/FAT, root directory), never the free
+                    // clusters it marks as unused, so anything already on disk under those clusters
+                    // survives formatting untouched. Writing the random fill first, through this same
+                    // encrypting stream, means even those never-written-by-the-formatter clusters end
+                    // up holding real ciphertext - matching every genuine VeraCrypt volume - instead of
+                    // the all-zero bytes CreateContainerFileAsync's own SetLength left behind.
+                    await FillDataAreaWithRandomDataAsync(stream, cancellationToken).ConfigureAwait(false);
+
+                    var lifetime = new ContainerLifetime { MaxAccessMode = ContainerAccessMode.ReadWrite };
+                    var (fileSystem, root) = await FormatFileSystemAsync(fileSystemType, stream, dataAreaSize, label, clusterSize, lifetime, cancellationToken).ConfigureAwait(false);
+
+                    // Physically flush the newly-formatted data area before handing the container
+                    // back - see SectorDecryptor.FlushToDisk. The caller may hand this file straight
+                    // to another process (e.g. mounting it in real VeraCrypt) the moment this returns,
+                    // and that process's own I/O can bypass the cache this data area's writes would
+                    // otherwise still only be sitting in.
+                    await Task.Run(() => stream.FlushToDisk(), cancellationToken).ConfigureAwait(false);
+
+                    return new VeraCryptContainer(stream, fileSystem, lifetime, root, algorithm, hashAlgorithm, fileSystemType);
+                }
+                catch
+                {
+                    stream.Dispose();
+                    throw;
+                }
+            }
+            catch
+            {
+                TryDeleteFile(path);
+                throw;
+            }
+        }
+
+        private static Task CreateContainerFileAsync(FileInfo path, long size, byte[] primaryRegion, byte[] backupRegion, CancellationToken cancellationToken)
+        {
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                FileStream stream;
+                try
+                {
+                    // FileMode.CreateNew - rather than the already-performed path.Exists check alone -
+                    // closes the race between that check and this call: it throws if another process
+                    // (or another call into this method) created the file in the meantime.
+                    stream = path.Open(FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+                }
+                catch (Exception ex) when (!(ex is ArgumentException || ex is ArgumentNullException))
+                {
+                    throw new InvalidOperationException($"Unable to create container file: {path.FullName}", ex);
+                }
+
+                using (stream)
+                {
+                    stream.SetLength(size);
+
+                    stream.Seek(0, SeekOrigin.Begin);
+                    stream.Write(primaryRegion, 0, primaryRegion.Length);
+                    FillWithRandomData(stream, HeaderParser.HeaderRegionSize, UnusedHeaderRegionSize);
+
+                    var backupRegionOffset = size - HeaderParser.BackupHeaderOffsetFromEnd;
+                    stream.Seek(backupRegionOffset, SeekOrigin.Begin);
+                    stream.Write(backupRegion, 0, backupRegion.Length);
+                    FillWithRandomData(stream, backupRegionOffset + HeaderParser.HeaderRegionSize, UnusedHeaderRegionSize);
+
+                    // Flush(true), not the parameterless overload - a real, physical flush, not just a
+                    // push into the OS's own shared cache. See SectorDecryptor.FlushToDisk for why:
+                    // VeraCrypt's own driver opens a file-hosted container with cache-bypassing,
+                    // unbuffered I/O for a standard 512-byte-sector host disk, so anything short of a
+                    // physical flush here leaves a real window where these header regions look stale
+                    // (or unwritten) to VeraCrypt itself, moments after this method returns.
+                    stream.Flush(true);
+                }
+            }, cancellationToken);
+        }
+
+        /// <summary>
+        /// The size, in bytes, of the "unused" space between the end of a 512-byte encrypted header
+        /// region and the start of whatever follows it - the data area, for the primary header; the
+        /// end of the file, for the backup header. This is where a hidden volume's own header would
+        /// live if one existed - see <see cref="FillWithRandomData"/> for why it matters that this
+        /// space is never left as zero.
+        /// </summary>
+        private const long UnusedHeaderRegionSize = HeaderParser.DataAreaOffset - HeaderParser.HeaderRegionSize;
+
+        /// <summary>
+        /// Fills a byte range with cryptographically random data. Verified against VeraCrypt's own
+        /// Volume Format Specification: every byte of a genuine VeraCrypt volume that isn't actually
+        /// in use - specifically the space between each 512-byte header region and the area where a
+        /// hidden volume's own header could reside, on both the primary and backup sides - is
+        /// indistinguishable from random noise in every real VeraCrypt-created volume, precisely so an
+        /// observer can never tell whether that space holds a hidden volume or nothing at all
+        /// (plausible deniability). <see cref="CreateContainerFileAsync"/> previously left this space
+        /// as zero, courtesy of <see cref="Stream.SetLength"/>'s own zero-fill on a newly extended
+        /// file - a real, spec-verified deviation from every genuine VeraCrypt volume, including this
+        /// project's own real-VeraCrypt-created test fixtures, which this method now closes.
+        /// </summary>
+        private static void FillWithRandomData(Stream stream, long offset, long length)
+        {
+            var buffer = new byte[length];
+            using (var rng = RandomNumberGenerator.Create())
+            {
+                rng.GetBytes(buffer);
+            }
+
+            stream.Seek(offset, SeekOrigin.Begin);
+            stream.Write(buffer, 0, buffer.Length);
+        }
+
+        /// <summary>
+        /// The chunk size used by <see cref="FillDataAreaWithRandomDataAsync"/>. Kept well below the
+        /// smallest containers this library is likely to create so the whole data area is never
+        /// buffered in memory at once (see Asiri.Core's own "do not load the entire container into
+        /// memory" requirement), while still being large enough to keep per-write overhead low for
+        /// realistically-sized containers.
+        /// </summary>
+        private const int DataAreaRandomFillChunkSize = 1024 * 1024;
+
+        /// <summary>
+        /// Fills the entire data area with cryptographically random plaintext, encrypted through
+        /// <paramref name="stream"/> exactly like any other write. Verified against VeraCrypt's own
+        /// Volume Format Specification: "free space on each VeraCrypt volume is filled with random
+        /// data when the volume is created", generated by encrypting random plaintext blocks and
+        /// writing the resulting ciphertext across the volume "right before volume formatting
+        /// begins" - i.e. the whole data area, not just whatever a filesystem formatter happens to
+        /// touch. Must run before <see cref="FormatFileSystemAsync"/> for that reason: formatting
+        /// only ever writes its own metadata, never the free clusters it marks unused, so this fill
+        /// is the only thing that ever reaches those bytes. Fills exactly <paramref name="stream"/>'s
+        /// own <see cref="Stream.Length"/> - which the stream itself derives from a whole number of
+        /// sectors - rather than the caller-specified data-area size verbatim, since that can include
+        /// a handful of trailing bytes short of a full sector that the stream never exposes as
+        /// writable at all.
+        /// </summary>
+        private static Task FillDataAreaWithRandomDataAsync(DecryptedBlockDeviceStream stream, CancellationToken cancellationToken)
+        {
+            return Task.Run(() =>
+            {
+                stream.Seek(0, SeekOrigin.Begin);
+                using (var rng = RandomNumberGenerator.Create())
+                {
+                    var buffer = new byte[Math.Min(DataAreaRandomFillChunkSize, stream.Length)];
+                    var remaining = stream.Length;
+                    while (remaining > 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var chunkSize = (int)Math.Min(buffer.Length, remaining);
+                        rng.GetBytes(buffer);
+                        stream.Write(buffer, 0, chunkSize);
+                        remaining -= chunkSize;
+                    }
+                }
+
+                // Leave the stream positioned where FormatFileSystemAsync's own formatters expect to
+                // start writing from - this fill otherwise leaves it at the end of the data area.
+                stream.Seek(0, SeekOrigin.Begin);
+            }, cancellationToken);
+        }
+
+        private static void TryDeleteFile(FileInfo path)
+        {
+            try
+            {
+                path.Refresh();
+                if (path.Exists)
+                {
+                    path.Delete();
+                }
+            }
+            catch
+            {
+                // Best-effort cleanup only - the exception from whatever step actually failed is what
+                // the caller needs to see, not a secondary failure from trying to delete the file.
+            }
+        }
+
+        private static Task<(DiscFileSystem fileSystem, IDirectory root)> FormatFileSystemAsync(
+            FileSystemType fsType, DecryptedBlockDeviceStream stream, long dataAreaSize, string label, int? clusterSize, ContainerLifetime lifetime, CancellationToken cancellationToken)
+        {
+            return Task.Run(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    (DiscFileSystem fileSystem, IDirectory root) result;
+                    switch (fsType)
+                    {
+                        case FileSystemType.Ntfs:
+                            result = FormatNtfs(stream, dataAreaSize, label, lifetime);
+                            break;
+                        case FileSystemType.Fat:
+                            result = FormatFat(stream, dataAreaSize, label, lifetime);
+                            break;
+                        case FileSystemType.ExFat:
+                            result = FormatExFat(stream, label, clusterSize, lifetime);
+                            break;
+                        default:
+                            // Unreachable: fsType is already caller-validated by CreateAsync.
+                            throw new ArgumentException($"Unsupported filesystem type: {fsType}.", nameof(fsType));
+                    }
+
+                    // None of DiscUtils' own from-scratch Format methods write the standard PC boot-
+                    // sector signature (0x55 0xAA at bytes 510-511 of the volume's first sector) -
+                    // nothing internal to DiscUtils itself checks for it, so its own formatters simply
+                    // never set it. Every genuine FAT/NTFS/exFAT volume carries it - confirmed
+                    // empirically against real VeraCrypt-created fixtures, see
+                    // DetectFileSystemTypeAsync's own remarks - and without it, real Windows refuses
+                    // to recognise the volume at all (confirmed: a container this method created
+                    // mounted successfully in real VeraCrypt - the encryption itself was never the
+                    // problem - but Explorer could not read its contents), and neither would Asiri's
+                    // own password-only auto-detecting OpenAsync, which checks for exactly this.
+                    stream.Seek(BootSignatureOffset, SeekOrigin.Begin);
+                    stream.Write(new[] { BootSignatureLowByte, BootSignatureHighByte }, 0, 2);
+
+                    return result;
+                }
+                catch (Exception ex) when (!(ex is OperationCanceledException))
+                {
+                    // Unlike OpenNtfsAsync/OpenFatAsync/OpenExFatAsync, an ArgumentException here is
+                    // never Asiri's OWN upstream parameter validation (that already happened, in
+                    // CreateAsync, before this was ever called) - it can only be DiscUtils' own
+                    // formatter rejecting the request (e.g. FatFileSystem.FormatPartition's "too small
+                    // for a partition") or the size-too-large check in FormatFat below, so both are
+                    // wrapped uniformly for a clearer message, rather than let through raw.
+                    throw new InvalidOperationException($"Failed to format a {fsType} filesystem within the container.", ex);
+                }
+            }, cancellationToken);
+        }
+
+        private static (DiscFileSystem fileSystem, IDirectory root) FormatNtfs(DecryptedBlockDeviceStream stream, long dataAreaSize, string label, ContainerLifetime lifetime)
+        {
+            var sectorCount = dataAreaSize / DefaultSectorSize;
+            var geometry = Geometry.FromCapacity(dataAreaSize, DefaultSectorSize);
+            var ntfs = NtfsFileSystem.Format(stream, label, geometry, firstSector: 0, sectorCount);
+
+            // The 5-argument Format() overload above - the only one that doesn't ask the caller to
+            // separately construct a full NtfsFormatOptions or hand-build a real x86 bootstrap - leaves
+            // the boot sector's first 3 bytes zero rather than a valid jump instruction. Confirmed
+            // independently (not just against Asiri's own read path): libmagic's `file` correctly
+            // identified a real VeraCrypt-created NTFS fixture in full detail down to its $MFT start
+            // cluster, but only ever reported a container formatted this way as a generic "DOS/MBR
+            // boot sector" - never specifically NTFS - until this was added. FAT's and exFAT's own
+            // DiscUtils formatters already write a correct jump themselves (confirmed the same way);
+            // this gap is NTFS-specific. EB 52 90 matches the exact bytes real VeraCrypt/Windows uses
+            // in every one of this project's own real NTFS test fixtures - a short jump to offset 0x52
+            // (which is also where DiscUtils' own NtfsFormatter's non-bootstrap BPB fields end) plus a
+            // NOP - not functional boot code, since nothing ever actually boots a VeraCrypt container,
+            // just bytes that look like a genuine one to whatever validates that they do.
+            stream.Seek(0, SeekOrigin.Begin);
+            stream.Write(new byte[] { 0xEB, 0x52, 0x90 }, 0, 3);
+
+            return (ntfs, new NtfsDirectory(ntfs, NtfsPathHelper.Root, lifetime));
+        }
+
+        private static (DiscFileSystem fileSystem, IDirectory root) FormatFat(DecryptedBlockDeviceStream stream, long dataAreaSize, string label, ContainerLifetime lifetime)
+        {
+            var sectorCount = dataAreaSize / DefaultSectorSize;
+            if (sectorCount > int.MaxValue)
+            {
+                throw new ArgumentException(
+                    $"The requested size is too large for a FAT filesystem via this library (data area over " +
+                    $"{(long)int.MaxValue * DefaultSectorSize} bytes). Use NTFS or exFAT instead.");
+            }
+
+            var geometry = Geometry.FromCapacity(dataAreaSize, DefaultSectorSize);
+            var fat = FatFileSystem.FormatPartition(stream, label, geometry, firstSector: 0, sectorCount: (int)sectorCount, reservedSectors: 0);
+            return (fat, new FatDirectory(fat, FatPathHelper.Root, lifetime));
+        }
+
+        /// <summary>
+        /// The cluster size used for a new exFAT filesystem when the caller doesn't request one -
+        /// 4 KiB, matching NTFS's own fixed cluster size (see FormatNtfs) rather than deferring to
+        /// ExFatPartition.Format's own size-tiered default (4 KiB up to 256 MiB, 32 KiB up to 32 GiB,
+        /// 128 KiB beyond that). An explicit, known value here keeps cluster size consistent across
+        /// every filesystem type CreateAsync can produce, rather than one that silently varies with
+        /// volume size for exFAT alone.
+        /// </summary>
+        private const int DefaultExFatClusterSize = 4096;
+
+        private static (DiscFileSystem fileSystem, IDirectory root) FormatExFat(DecryptedBlockDeviceStream stream, string label, int? clusterSize, ContainerLifetime lifetime)
+        {
+            var effectiveClusterSize = clusterSize ?? DefaultExFatClusterSize;
+            var options = new ExFatFormatOptions { SectorsPerCluster = (uint)(effectiveClusterSize / DefaultSectorSize) };
+
+            // ExFatPathFilesystem.Format returns a transient wrapper needed only while writing the new
+            // filesystem's metadata - it must be disposed (flushing it) before the same stream can be
+            // reopened as a normal ExFatFileSystem, exactly matching DiscUtils' own
+            // ExFatFileSystem.Format(PhysicalVolumeInfo, ...) convenience wrapper, which does the same
+            // two-step dance internally.
+            using (ExFatPathFilesystem.Format(stream, options, label))
+            {
+            }
+
+            var exFat = new ExFatFileSystem(stream, ExFatPathHelper.PathSeparators);
+            return (exFat, new ExFatDirectory(exFat, ExFatPathHelper.Root, lifetime));
+        }
+
+        /// <summary>
         /// Changes a container's password, keyfiles, PIM, and/or hash algorithm, without touching
         /// its contents. Verified against VeraCrypt's own source (Common/Password.c's
         /// <c>ChangePwd</c>), not just its documentation: the volume's master and secondary keys -
@@ -472,7 +998,7 @@ namespace uk.andyjohnson.Asiri.Core
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            Stream fileStream;
+            FileStream fileStream;
             try
             {
                 fileStream = path.Open(FileMode.Open, FileAccess.ReadWrite, FileShare.None);
@@ -488,14 +1014,18 @@ namespace uk.andyjohnson.Asiri.Core
                 // still openable with the OLD credentials via automatic backup-header fallback, since
                 // the backup hasn't been touched yet. CancellationToken.None from here on - see the
                 // remarks on honouring cancellation only up to this point.
+                // Flush(true) throughout, not the parameterless overload - see
+                // SectorDecryptor.FlushToDisk: a physical flush, not just a push into the OS's own
+                // shared cache, matching how VeraCrypt's own driver can read this file with
+                // cache-bypassing, unbuffered I/O.
                 await HeaderParser.WriteRegionAsync(fileStream, 0, newPrimaryRegion, CancellationToken.None).ConfigureAwait(false);
-                fileStream.Flush();
+                fileStream.Flush(true);
 
                 var backupOffset = fileStream.Length - HeaderParser.BackupHeaderOffsetFromEnd;
                 try
                 {
                     await HeaderParser.WriteRegionAsync(fileStream, backupOffset, newBackupRegion, CancellationToken.None).ConfigureAwait(false);
-                    fileStream.Flush();
+                    fileStream.Flush(true);
                 }
                 catch (Exception ex)
                 {
@@ -817,6 +1347,173 @@ namespace uk.andyjohnson.Asiri.Core
         }
 
         /// <summary>
+        /// The size, in bytes, of the container's decrypted filesystem - its encrypted data area,
+        /// i.e. <see cref="HeaderParser.TotalHeaderOverheadSize"/> less than the container's own total
+        /// file size. What <see cref="DumpRawImageAsync"/> writes for <see cref="RawImageExportFormat.RawImage"/>.
+        /// </summary>
+        public long FileSystemSizeInBytes
+        {
+            get
+            {
+                _lifetime.ThrowIfClosed();
+                return _stream.Length;
+            }
+        }
+
+        /// <summary>
+        /// Exports the container's decrypted filesystem to <paramref name="destination"/>, in the
+        /// given <paramref name="format"/> - none of it encrypted, and none of it interpreted by
+        /// Asiri or DiscUtils on the way out. Added specifically to let that plaintext be handed to
+        /// tools, reviewers, or a real OS's own mount path entirely outside Asiri, to help pin down
+        /// why a container this library creates isn't recognised by a real OS - a question Asiri's
+        /// own read path, which agrees with itself by construction, can't answer on its own.
+        /// </summary>
+        /// <param name="destination">
+        /// The stream to write the export to. Written to starting at its current position; never
+        /// sought or resized by this method.
+        /// </param>
+        /// <param name="format">The export format - see <see cref="RawImageExportFormat"/>.</param>
+        /// <param name="cancellationToken">A token to cancel the operation.</param>
+        public Task DumpRawImageAsync(Stream destination, RawImageExportFormat format = RawImageExportFormat.RawImage, CancellationToken cancellationToken = default)
+        {
+            if (destination == null)
+            {
+                throw new ArgumentNullException(nameof(destination));
+            }
+            switch (format)
+            {
+                case RawImageExportFormat.RawImage:
+                case RawImageExportFormat.RawImageBootSectorOnly:
+                case RawImageExportFormat.Vhd:
+                case RawImageExportFormat.VhdWithPartitionTable:
+                    break;
+                default:
+                    throw new ArgumentException($"Unsupported export format: {format}.", nameof(format));
+            }
+            _lifetime.ThrowIfClosed();
+
+            return DumpRawImageAsyncCore(destination, format, cancellationToken);
+        }
+
+        private Task DumpRawImageAsyncCore(Stream destination, RawImageExportFormat format, CancellationToken cancellationToken)
+        {
+            switch (format)
+            {
+                case RawImageExportFormat.RawImage:
+                    return CopyRawBytesAsync(destination, _stream.Length, cancellationToken);
+                case RawImageExportFormat.RawImageBootSectorOnly:
+                    return CopyRawBytesAsync(destination, DefaultSectorSize, cancellationToken);
+                case RawImageExportFormat.Vhd:
+                    return WriteVhdAsync(destination, cancellationToken);
+                case RawImageExportFormat.VhdWithPartitionTable:
+                    return WriteVhdWithPartitionTableAsync(destination, cancellationToken);
+                default:
+                    // Unreachable: format is already caller-validated by DumpRawImageAsync.
+                    throw new ArgumentException($"Unsupported export format: {format}.", nameof(format));
+            }
+        }
+
+        /// <summary>
+        /// Wraps the container's decrypted filesystem in a fixed-size VHD with no partition table -
+        /// see <see cref="RawImageExportFormat.Vhd"/>'s own remarks for why no partition table.
+        /// </summary>
+        private async Task WriteVhdAsync(Stream destination, CancellationToken cancellationToken)
+        {
+            var capacity = _stream.Length;
+            using (var disk = Disk.InitializeFixed(destination, DiscUtils.Streams.Ownership.None, capacity))
+            {
+                await CopyRawBytesAsync(disk.Content, capacity, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// The extra space reserved, beyond the filesystem's own size, when building a partitioned
+        /// VHD - enough to comfortably cover the MBR plus BiosPartitionTable's own alignment gap
+        /// before the partition's first sector (conventionally around 1 MiB), without needing to
+        /// compute the exact figure ourselves.
+        /// </summary>
+        private const long VhdPartitionOverhead = 4 * 1024 * 1024;
+
+        /// <summary>
+        /// Wraps the container's decrypted filesystem in a fixed-size VHD with a single MBR partition
+        /// around it - see <see cref="RawImageExportFormat.VhdWithPartitionTable"/>'s own remarks.
+        /// </summary>
+        private async Task WriteVhdWithPartitionTableAsync(Stream destination, CancellationToken cancellationToken)
+        {
+            var filesystemSize = _stream.Length;
+            var capacity = filesystemSize + VhdPartitionOverhead;
+
+            using (var disk = Disk.InitializeFixed(destination, DiscUtils.Streams.Ownership.None, capacity))
+            {
+                BiosPartitionTable.Initialize(disk, GetPartitionType(FileSystemType));
+                using (var partitionStream = disk.Partitions[0].Open())
+                {
+                    await CopyRawBytesAsync(partitionStream, filesystemSize, cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The MBR partition type byte real Windows-formatted disks conventionally use for a given
+        /// filesystem. MBR has no dedicated exFAT type - real exFAT partitions typically use GPT's own
+        /// "Basic Data" type instead - so this maps exFAT to the same type NTFS uses (0x07), matching
+        /// how MBR-partitioned exFAT volumes are conventionally marked in practice.
+        /// </summary>
+        private static WellKnownPartitionType GetPartitionType(FileSystemType fileSystemType)
+        {
+            switch (fileSystemType)
+            {
+                case FileSystemType.Fat:
+                    return WellKnownPartitionType.WindowsFat;
+                case FileSystemType.Ntfs:
+                case FileSystemType.ExFat:
+                    return WellKnownPartitionType.WindowsNtfs;
+                default:
+                    // Unreachable: fileSystemType is always a value this container was itself opened
+                    // or created with, already validated at that point.
+                    throw new ArgumentException($"Unsupported filesystem type: {fileSystemType}.", nameof(fileSystemType));
+            }
+        }
+
+        /// <summary>
+        /// Copies <paramref name="byteCount"/> bytes of the container's decrypted filesystem, from
+        /// the start, to <paramref name="destination"/>.
+        /// </summary>
+        private async Task CopyRawBytesAsync(Stream destination, long byteCount, CancellationToken cancellationToken)
+        {
+            var remaining = byteCount;
+            var buffer = new byte[81920];
+
+            lock (_lifetime.Lock)
+            {
+                _stream.Seek(0, SeekOrigin.Begin);
+            }
+
+            while (remaining > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var toRead = (int)Math.Min(buffer.Length, remaining);
+                int read;
+                // Only the synchronous read against the shared _stream needs the lock - the same
+                // object every DiscUtils filesystem call also reads/writes through (see
+                // ContainerLifetime.Lock's own remarks) - not the async write to destination, which
+                // touches nothing shared with the rest of this container.
+                lock (_lifetime.Lock)
+                {
+                    read = _stream.Read(buffer, 0, toRead);
+                }
+                if (read == 0)
+                {
+                    break;
+                }
+
+                await destination.WriteAsync(buffer, 0, read, cancellationToken).ConfigureAwait(false);
+                remaining -= read;
+            }
+        }
+
+        /// <summary>
         /// Closes the container and releases the underlying filesystem and stream. Safe to call
         /// more than once: only the first call has any effect.
         /// </summary>
@@ -843,7 +1540,14 @@ namespace uk.andyjohnson.Asiri.Core
                 }
 
                 _lifetime.IsClosed = true;
+                // Dispose the filesystem first, so DiscUtils pushes any of its own pending writes
+                // through this stream (which encrypts and writes through immediately - see
+                // DecryptedBlockDeviceStream.Flush's remarks), then force those writes to physical
+                // storage - not just the OS cache a plain Dispose() would leave them in - before
+                // closing the file handle. See SectorDecryptor.FlushToDisk for why this matters; a
+                // no-op if this container was never opened for writing.
                 _fileSystem.Dispose();
+                _stream.FlushToDisk();
                 _stream.Dispose();
             }
         }

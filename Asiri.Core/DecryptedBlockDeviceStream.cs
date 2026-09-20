@@ -157,6 +157,16 @@ namespace uk.andyjohnson.Asiri.Core
             _position += count;
         }
 
+        /// <summary>
+        /// Forces every write made through this stream down to physical storage - see
+        /// <see cref="SectorDecryptor.FlushToDisk"/> for why this is distinct from, and more than,
+        /// this stream's own (deliberately no-op) <see cref="Flush"/>.
+        /// </summary>
+        internal void FlushToDisk()
+        {
+            _decryptor.FlushToDisk();
+        }
+
         /// <inheritdoc />
         protected override void Dispose(bool disposing)
         {

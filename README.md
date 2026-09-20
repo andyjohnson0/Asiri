@@ -19,14 +19,18 @@ instructions given by **Andrew Johnson** ([andy@andyjohnson.uk](mailto:andy@andy
 
 This is a hobby/experimental project exploring what an AI coding agent can produce end-to-end. It
 has **not** undergone independent security review or a cryptographic audit. Read access is the
-mature, well-exercised path; write access exists but is newer, opt-in, and has not yet been verified
-against real VeraCrypt (only against Asiri's own round-trip and synthetic tests — see below). Treat
+mature, well-exercised path. Write access exists, is newer and opt-in, and has now been exercised
+against a real, running VeraCrypt: a container created with `CreateAsync` was confirmed to mount and
+have its filesystem recognised by VeraCrypt, and content changes were round-tripped through both a
+real VeraCrypt mount and Asiri.ContainerBrowser — but this was a manual, one-off check, not the
+exhaustive automated coverage across every filesystem/cipher combination that read access has. Treat
 the whole library accordingly: do not use it as your only means of accessing data you care about, and
 do not rely on it in any security-critical context without your own review.
 
-**⚠️ Write access is pre-release and unverified against real VeraCrypt. Only use it on containers you
-have backed up.** A bug in the write path could corrupt a container beyond what VeraCrypt itself can
-open. Read access does not carry this risk.
+**⚠️ Write access is opt-in and pre-release. Only use it on containers you have backed up.** It has
+been confirmed to work against a real, running VeraCrypt (see above), but not yet across the full
+range of filesystems, ciphers, and scenarios that read access covers. A bug in the write path could
+corrupt a container beyond what VeraCrypt itself can open.
 
 **⚠️ Changing a container's password/keyfiles is also pre-release and unverified against real
 VeraCrypt. Only use it on containers you have backed up.** This rewrites the volume header in
@@ -41,10 +45,14 @@ container's bytes and re-running the test suite will produce failures — a simp
 that the read path is exercising real decryption against real VeraCrypt output, not just checking the
 code's assumptions against themselves.
 
-Write access does not yet have an equivalent independent check: its tests confirm that Asiri's own
-encryption and decryption agree with each other (self-consistency), not that a container Asiri wrote
-to is still readable by real VeraCrypt. That verification is planned but not yet done — see the
-caution above. The same applies to changing a container's password or keyfiles.
+Write access now has a first, manual version of an equivalent independent check: a container created
+with `CreateAsync` was confirmed to mount and have its filesystem recognised by a real, running
+VeraCrypt, and content round-tripped through both a real VeraCrypt mount and
+Asiri.ContainerBrowser was confirmed consistent on both sides — see `Asiri.Diagnostics`, a standalone
+tool built for exactly this kind of cross-check against a live VeraCrypt process. This is not yet
+automated or exhaustive the way the read path's real-fixture tests are, so treat it as a first data
+point, not full parity with read access's verification. Changing a container's password or keyfiles
+has not been separately verified this way — the caution above still applies to that in full.
 
 ## Status
 

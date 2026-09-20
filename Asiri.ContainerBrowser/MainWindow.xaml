@@ -97,6 +97,11 @@
     <DockPanel>
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
+                <MenuItem x:Name="CreateContainerMenuItem" Header="_New Container..." Click="CreateContainerMenuItem_Click">
+                    <MenuItem.Icon>
+                        <svgc:SvgViewbox Source="Icons/hdd.svg" Width="16" Height="16"/>
+                    </MenuItem.Icon>
+                </MenuItem>
                 <MenuItem x:Name="OpenMenuItem" Header="_Open Container..." Click="OpenMenuItem_Click">
                     <MenuItem.Icon>
                         <svgc:SvgViewbox Source="Icons/folder2-open.svg" Width="16" Height="16"/>
@@ -105,6 +110,11 @@
                 <MenuItem x:Name="CloseMenuItem" Header="_Close Container" Click="CloseMenuItem_Click" IsEnabled="False">
                     <MenuItem.Icon>
                         <svgc:SvgViewbox Source="Icons/x-circle.svg" Width="16" Height="16"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem x:Name="DumpImageMenuItem" Header="_Dump Raw Image..." Click="DumpImageMenuItem_Click" IsEnabled="False">
+                    <MenuItem.Icon>
+                        <svgc:SvgViewbox Source="Icons/file-earmark-arrow-down.svg" Width="16" Height="16"/>
                     </MenuItem.Icon>
                 </MenuItem>
                 <Separator/>

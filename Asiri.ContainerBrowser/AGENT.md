@@ -35,6 +35,24 @@ This document takes precedence over all other instructions for the Asiri.Contain
 - Support dragging a file out of the tree to export a decrypted copy to another application (e.g.
   Explorer) - this is a read operation, so it doesn't require writing to be armed, unlike moving a
   file or directory within the container, which does.
+- Provide a way to create a brand new VeraCrypt container via `VeraCryptContainer.CreateAsync`, using
+  `NewContainerDialog` for its path (via a Browse... button opening a file save dialog), size,
+  filesystem type, an optional cluster size, an optional volume label, the password, PIM, keyfiles,
+  and the encryption/hash algorithm to protect it with - the algorithm/hash choices are required
+  explicitly, the same way the "current credentials" step of the Change Password flow requires them,
+  since creation has no auto-detecting overload to fall back on. The cluster size field is only
+  enabled when exFAT is selected, since `CreateAsync` rejects a non-default cluster size for NTFS/FAT
+  outright (see Asiri.Core's own scope notes). While creation is in progress, show `ProgressDialog`,
+  the same as Open. On success, load the new (empty) container into the window exactly as Open would,
+  with writing already armed - there is no reason to make the user separately enable it before
+  populating a container they just created.
+- Provide a way to export the currently open container's decrypted filesystem to a plain file via
+  `VeraCryptContainer.DumpRawImageAsync`, using `DumpImageDialog` for the output path (via a
+  Browse... button, matching `NewContainerDialog`'s own pattern) and a picker for the
+  `RawImageExportFormat` to export as (whole filesystem, boot sector only, an unpartitioned VHD, or a
+  VHD with a single MBR partition). Enabled only while a container is open, alongside Close. Show
+  `ProgressDialog` while the export is in progress, the same as every other potentially slow
+  operation.
 - Provide a way to change a container's password, keyfiles, PIM, and/or hash algorithm via
   `VeraCryptContainer.ChangePasswordAsync`, as its own command independent of whatever container (if
   any) is currently open in the window - that method is static and operates on a file the user picks

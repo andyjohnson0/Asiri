@@ -452,6 +452,27 @@ namespace uk.andyjohnson.Asiri.Core
         }
 
         /// <summary>
+        /// Forces every write made through this decryptor down to physical storage, not merely into
+        /// the OS's own shared cache - which is all an ordinary <see cref="Dispose"/> or ordinary
+        /// <see cref="FileStream.Flush()"/> guarantees. This matters because VeraCrypt's own driver,
+        /// verified against its source (src/Driver/Ntvol.c), opens a file-hosted container with
+        /// <c>FILE_NO_INTERMEDIATE_BUFFERING</c> whenever the host disk's sector size is the standard
+        /// 512 bytes - genuinely unbuffered I/O that bypasses the Cache Manager and reads straight
+        /// from the physical device. Without an explicit physical flush here, there is a real window
+        /// where a container this library just wrote - still sitting in the OS cache, not yet on the
+        /// physical medium - looks unwritten (or stale) to that kind of direct read. A no-op if this
+        /// decryptor was opened read-only, since nothing could have been written through it.
+        /// </summary>
+        internal void FlushToDisk()
+        {
+            ThrowIfDisposed();
+            if (CanWrite)
+            {
+                _stream.Flush(true);
+            }
+        }
+
+        /// <summary>
         /// Closes the underlying file handle. Safe to call more than once: only the first call has
         /// any effect.
         /// </summary>

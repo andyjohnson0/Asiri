@@ -32,6 +32,88 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             Closing += (_, _) => _container?.Close();
         }
 
+        /// <summary>
+        /// Creates a brand new VeraCrypt container via <see cref="VeraCryptContainer.CreateAsync"/>
+        /// and loads it into the window exactly as <see cref="OpenMenuItem_Click"/> would - a freshly
+        /// created container is empty, so there's no reason to make the user separately arm writing
+        /// before they can start populating it, unlike opening an existing one. Mirrors
+        /// <see cref="OpenMenuItem_Click"/>'s own "one container at a time" gating: this and
+        /// <see cref="OpenMenuItem"/> are both disabled once a container is open, and both re-enabled
+        /// only by <see cref="CloseMenuItem_Click"/> - creating a second container without closing the
+        /// first would otherwise leak its handle, the same way opening a second one would.
+        /// </summary>
+        private async void CreateContainerMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            var newContainerDialog = new NewContainerDialog { Owner = this };
+            if (newContainerDialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            var path = newContainerDialog.ContainerPath!;
+            if (path.Exists)
+            {
+                // SaveFileDialog's own standard "Do you want to replace it?" prompt already confirmed
+                // this - CreateAsync itself always refuses to overwrite an existing file, so that
+                // confirmation is honoured here rather than surfacing as a confusing second,
+                // unexplained failure.
+                try
+                {
+                    path.Delete();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, ex.Message, "Unable to replace existing file", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+            }
+
+            CreateContainerMenuItem.IsEnabled = false;
+            OpenMenuItem.IsEnabled = false;
+
+            using var cancellationTokenSource = new CancellationTokenSource();
+            var progressDialog = new ProgressDialog(cancellationTokenSource, "Creating container...") { Owner = this };
+            progressDialog.Show();
+            IsEnabled = false;
+
+            try
+            {
+                _accessMode = ContainerAccessMode.ReadWrite;
+                _container = await VeraCryptContainer.CreateAsync(
+                    path, newContainerDialog.SizeInBytes, newContainerDialog.Password, newContainerDialog.Algorithm, newContainerDialog.HashAlgorithm,
+                    newContainerDialog.FileSystemType, newContainerDialog.Pim, newContainerDialog.KeyFiles, newContainerDialog.Label, newContainerDialog.ClusterSize,
+                    cancellationTokenSource.Token);
+                _container.IsWritable = true;
+
+                ClearContentPane();
+                await LoadRootAsync(path.Name);
+
+                CloseMenuItem.IsEnabled = true;
+                DumpImageMenuItem.IsEnabled = true;
+                WritingEnabledMenuItem.IsEnabled = true;
+                WritingEnabledMenuItem.IsChecked = true;
+                UpdateWriteStatusText();
+                StatusText.Text = $"Created: {path.FullName} ({_container.Algorithm} / {_container.HashAlgorithm} / {_container.FileSystemType})";
+            }
+            catch (OperationCanceledException)
+            {
+                CreateContainerMenuItem.IsEnabled = true;
+                OpenMenuItem.IsEnabled = true;
+                StatusText.Text = "Create cancelled.";
+            }
+            catch (Exception ex)
+            {
+                CreateContainerMenuItem.IsEnabled = true;
+                OpenMenuItem.IsEnabled = true;
+                MessageBox.Show(this, ex.Message, "Unable to create container", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                IsEnabled = true;
+                progressDialog.Close();
+            }
+        }
+
         private async void OpenMenuItem_Click(object sender, RoutedEventArgs e)
         {
             var openDialog = new OpenFileDialog
@@ -68,6 +150,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
                 await LoadRootAsync(Path.GetFileName(openDialog.FileName));
 
                 CloseMenuItem.IsEnabled = true;
+                DumpImageMenuItem.IsEnabled = true;
                 WritingEnabledMenuItem.IsEnabled = _accessMode == ContainerAccessMode.ReadWrite;
                 UpdateWriteStatusText();
                 StatusText.Text = $"Opened: {openDialog.FileName} ({_container.Algorithm} / {_container.HashAlgorithm} / {_container.FileSystemType})";
@@ -99,11 +182,61 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             ClearContentPane();
 
             OpenMenuItem.IsEnabled = true;
+            CreateContainerMenuItem.IsEnabled = true;
             CloseMenuItem.IsEnabled = false;
+            DumpImageMenuItem.IsEnabled = false;
             WritingEnabledMenuItem.IsEnabled = false;
             WritingEnabledMenuItem.IsChecked = false;
             StatusText.Text = "No container open.";
             WriteStatusText.Text = string.Empty;
+        }
+
+        /// <summary>
+        /// Exports the currently open container's decrypted filesystem to a plain file via
+        /// <see cref="VeraCryptContainer.DumpRawImageAsync"/>, so it can be examined by a filesystem-
+        /// checking tool, another person, a real OS's own mount path, or another AI session entirely
+        /// outside Asiri: a way to ask "is this actually a valid filesystem?" using something other
+        /// than Asiri's own read path, which - reading back exactly what it itself wrote - can't
+        /// answer that question about itself.
+        /// </summary>
+        private async void DumpImageMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new DumpImageDialog { Owner = this };
+            if (dialog.ShowDialog() != true)
+            {
+                return;
+            }
+
+            using var cancellationTokenSource = new CancellationTokenSource();
+            var progressDialog = new ProgressDialog(cancellationTokenSource, "Dumping raw image...") { Owner = this };
+            progressDialog.Show();
+            IsEnabled = false;
+
+            try
+            {
+                // ReadWrite, not Write-only: DiscUtils' VHD writer reads back from the destination
+                // stream too (e.g. to finalize its footer), and throws "Stream does not support
+                // reading" against a write-only handle - confirmed the hard way.
+                using (var destination = dialog.OutputPath!.Open(FileMode.Create, FileAccess.ReadWrite, FileShare.None))
+                {
+                    await _container!.DumpRawImageAsync(destination, dialog.Format, cancellationTokenSource.Token);
+                }
+
+                MessageBox.Show(this, $"The raw image has been written to {dialog.OutputPath!.FullName}.", "Dump Raw Image", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (OperationCanceledException)
+            {
+                StatusText.Text = "Dump cancelled.";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Unable to dump image", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                IsEnabled = true;
+                progressDialog.Close();
+            }
         }
 
         private void ExitMenuItem_Click(object sender, RoutedEventArgs e)
@@ -709,6 +842,16 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 
                         await existingFile.DeleteAsync(token);
                         existingEntries.Remove(name);
+
+                        // The tree still has a node for the file just deleted - AddNewChildNode below
+                        // only ever adds, it never replaces, so without this the deleted file's stale
+                        // node would stay put and the new one would appear alongside it: one real file
+                        // in the container, but two rows for it in the tree.
+                        var staleNode = targetNode.Children.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+                        if (staleNode != null)
+                        {
+                            DetachNode(staleNode);
+                        }
                     }
 
                     using var sourceStream = File.OpenRead(path);

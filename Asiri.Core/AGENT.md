@@ -22,6 +22,35 @@ This document takes precedence over all other instructions for the Asiri.Core pr
   algorithm cannot change this way. Two scope reductions relative to real VeraCrypt, both deliberate:
   no multi-pass anti-forensic overwrite of the old header location, and no preservation of the
   container file's own timestamps.
+- Implement creating a brand new container (`VeraCryptContainer.CreateAsync`): a freshly generated
+  master key, a header built from scratch (not re-encrypting an existing one, unlike
+  `ChangePasswordAsync`), and the chosen filesystem formatted via DiscUtils directly onto the
+  container's encrypted stream. The caller-specified size is the container's TOTAL FILE SIZE,
+  verified against VeraCrypt's own source (Common/Format.c's `TCFormatVolume`) - VeraCrypt's fixed
+  256 KiB header overhead comes out of that, not on top of it. An optional cluster size may be
+  requested, but only for exFAT: verified against DiscUtils' own source, its NTFS and FAT formatters
+  give no way to override their own fixed/size-derived cluster size at all, so a non-null value for
+  either of those is rejected rather than silently ignored. The space between each 512-byte header
+  region and the area where a hidden volume's own header could reside (both the primary side, before
+  the data area, and the backup side, before end-of-file) is filled with cryptographically random
+  data, not left zero - verified against VeraCrypt's own Volume Format Specification, which documents
+  this space as containing random data in every genuine volume regardless of whether a hidden volume
+  is actually present, precisely so its contents give no clue either way. The entire data area is
+  likewise filled with random data, encrypted through the container's own stream, before the chosen
+  filesystem is formatted on top of it - also verified against the Volume Format Specification, which
+  documents this as happening "right before volume formatting begins": a filesystem formatter only
+  ever writes its own metadata, never the free clusters it marks unused, so without this fill those
+  clusters would remain the raw, unencrypted zero bytes a newly-extended file starts as, rather than
+  looking like every other part of a genuine VeraCrypt volume.
+- Implement `VeraCryptContainer.DumpRawImageAsync`/`FileSystemSizeInBytes`: a diagnostic escape hatch
+  that exports a container's decrypted filesystem, unencrypted and uninterpreted by DiscUtils or
+  Asiri, to a caller-supplied stream in one of four `RawImageExportFormat`s - the whole filesystem as
+  a bare image, just its first 512 bytes, or wrapped in a VHD (with or without a single MBR partition
+  around it - both exist side by side specifically to separate "is the filesystem's own content
+  wrong" from "does a partitioned-vs-unpartitioned layout matter" while diagnosing a real-OS
+  recognition problem) that Windows can mount natively - for handing the plaintext to a filesystem-
+  checking tool, another person, a real OS's own mount path, or another AI session, entirely outside
+  Asiri, since Asiri's own read path can't independently judge bytes it wrote itself.
 - Do not implement support for encrypted partitions or drives.
 - Do not implement hidden volumes.
 - Implement AES, Serpent, Twofish, and Camellia.
@@ -102,7 +131,9 @@ This document takes precedence over all other instructions for the Asiri.Core pr
 - All exceptions must include descriptive messages.
 
 ## Dependencies
-- Use only BouncyCastle and DiscUtils (the LTRData.DiscUtils.* packages: Core, Fat, Ntfs, ExFat).
+- Use only BouncyCastle and DiscUtils (the LTRData.DiscUtils.* packages: Core, Fat, Ntfs, ExFat, Vhd -
+  the last used only for `DumpRawImageAsync`'s VHD export format, not for anything container-format
+  related).
 - Do not add any other dependencies without explicit permission.
 
 ## Prohibitions

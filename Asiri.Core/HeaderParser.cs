@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -37,6 +38,27 @@ namespace uk.andyjohnson.Asiri.Core
         /// The offset of the backup header region from the end of the container file.
         /// </summary>
         public const long BackupHeaderOffsetFromEnd = 131072;
+
+        /// <summary>
+        /// The byte offset, within the container file, where a non-hidden volume's encrypted data
+        /// area begins - verified against VeraCrypt's own source (Common/Volumes.h's
+        /// TC_VOLUME_DATA_OFFSET), not assumed. Numerically identical to
+        /// <see cref="BackupHeaderOffsetFromEnd"/> - both equal the size of one header group (a 64KB
+        /// header slot plus a 64KB slot always reserved for, but unused by, a hidden volume) - kept
+        /// as a separate constant since the two represent different things: this is measured from
+        /// the start of the file, that one from the end.
+        /// </summary>
+        internal const long DataAreaOffset = 131072;
+
+        /// <summary>
+        /// The total size, in bytes, VeraCrypt reserves for headers in a non-hidden volume: a primary
+        /// header group (<see cref="DataAreaOffset"/> bytes at the start of the file) plus a backup
+        /// header group (<see cref="BackupHeaderOffsetFromEnd"/> bytes at the end) - verified against
+        /// VeraCrypt's own source (TC_TOTAL_VOLUME_HEADERS_SIZE). See
+        /// <see cref="VeraCryptContainer.CreateAsync"/>: a new container's caller-specified total file
+        /// size must exceed this by however much the chosen filesystem itself needs on top.
+        /// </summary>
+        internal const long TotalHeaderOverheadSize = DataAreaOffset + BackupHeaderOffsetFromEnd;
 
         /// <summary>
         /// Computes the PBKDF2 iteration count for the given PIM (Personal Iterations Multiplier),
@@ -358,6 +380,84 @@ namespace uk.andyjohnson.Asiri.Core
             }, cancellationToken);
         }
 
+        /// <summary>
+        /// Generates a fresh, random master key and secondary key for a brand new volume - the
+        /// "create from scratch" counterpart to reusing an existing header's keys unchanged (see
+        /// <see cref="BuildHeaderRegionAsync"/>, used instead when only the header's own encryption
+        /// changes). Verified against VeraCrypt's own source (Common/Volumes.c's
+        /// CreateVolumeHeaderInMemory): both keys are generated together and then sanity-checked -
+        /// the master key must not be identical to the secondary key - before being accepted, since
+        /// NIST SP800-38E flags identical AES-XTS key components as a weakness. A genuine CSPRNG makes
+        /// this astronomically unlikely to ever fail; the loop exists only to match VeraCrypt's own
+        /// defense-in-depth, not because failure is expected.
+        /// </summary>
+        internal static (byte[] MasterKey, byte[] SecondaryKey) GenerateMasterKeys(CryptoAlgorithm algorithm)
+        {
+            var keyMaterialSize = CascadeDefinitions.ComponentKeySize * CascadeDefinitions.GetComponentCount(algorithm);
+
+            using (var rng = RandomNumberGenerator.Create())
+            {
+                while (true)
+                {
+                    var masterKey = new byte[keyMaterialSize];
+                    var secondaryKey = new byte[keyMaterialSize];
+                    rng.GetBytes(masterKey);
+                    rng.GetBytes(secondaryKey);
+
+                    if (!masterKey.SequenceEqual(secondaryKey))
+                    {
+                        return (masterKey, secondaryKey);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Builds a fresh <see cref="EncryptedHeaderSize"/>-byte plaintext volume header for a brand
+        /// new, non-hidden container - the "create from scratch" counterpart to
+        /// <see cref="BuildHeaderRegionAsync"/>, which only ever re-encrypts an EXISTING plaintext
+        /// verbatim. Every field is laid out exactly as <see cref="ValidateAndBuildHeader"/> reads it
+        /// back, verified field-for-field against VeraCrypt's own source: magic, header version, a
+        /// hidden-volume size of zero, the volume/encrypted-area size set to <paramref name="dataAreaSize"/>
+        /// (the DATA AREA size, not the container's total file size - see
+        /// <see cref="VeraCryptContainer.CreateAsync"/> for that distinction), a master-key-scope
+        /// offset of <see cref="DataAreaOffset"/>, and finally both CRC-32 checks.
+        /// </summary>
+        /// <param name="dataAreaSize">The size, in bytes, of the volume's encrypted data area.</param>
+        /// <param name="sectorSize">The sector size, in bytes, to record in the header.</param>
+        /// <param name="masterKey">The volume's master key, from <see cref="GenerateMasterKeys"/>.</param>
+        /// <param name="secondaryKey">The volume's secondary key, from <see cref="GenerateMasterKeys"/>.</param>
+        internal static byte[] BuildNewHeaderPlaintext(long dataAreaSize, int sectorSize, byte[] masterKey, byte[] secondaryKey)
+        {
+            var d = new byte[EncryptedHeaderSize];
+            Encoding.ASCII.GetBytes(ExpectedMagic).CopyTo(d, 0);
+            WriteUInt16BE(d, 4, (ushort)MaxHeaderVersion);
+            // Not validated or interpreted by Asiri itself on read (see ValidateAndBuildHeader), but
+            // it matters enormously to a REAL VeraCrypt driver: verified against VeraCrypt's own
+            // source, Common/Volumes.c sets cryptoInfo->LegacyVolume = RequiredProgramVersion < 0x10b,
+            // and a legacy volume is located via a completely different, much smaller data area offset
+            // (TC_VOLUME_HEADER_SIZE_LEGACY, not this container's real 131072-byte one) - Driver/Ntvol.c.
+            // The previous value here, 0x0108, was three short of that threshold, so every container
+            // this method built was silently mounted as a legacy volume by real VeraCrypt, which then
+            // decrypted from entirely the wrong offset. 0x010b matches VeraCrypt's own
+            // TC_VOLUME_MIN_REQUIRED_PROGRAM_VERSION constant (Common/Volumes.h), which its own format
+            // code writes for every new, non-legacy volume.
+            WriteUInt16BE(d, 6, 0x010b);
+            WriteInt64BE(d, 28, 0); // HiddenVolumeSize: always zero - Asiri never creates hidden volumes.
+            WriteInt64BE(d, 36, dataAreaSize); // VolumeSize
+            WriteInt64BE(d, 44, DataAreaOffset); // MasterKeyScopeOffset
+            WriteInt64BE(d, 52, dataAreaSize); // EncryptedAreaSize
+            WriteUInt32BE(d, 60, 0); // Flags
+            WriteUInt32BE(d, 64, (uint)sectorSize);
+            Buffer.BlockCopy(masterKey, 0, d, 192, masterKey.Length);
+            Buffer.BlockCopy(secondaryKey, 0, d, 192 + masterKey.Length, secondaryKey.Length);
+
+            WriteUInt32BE(d, 8, Crc32.Compute(d, 192, 256));
+            WriteUInt32BE(d, 188, Crc32.Compute(d, 0, 188));
+
+            return d;
+        }
+
         private static Task<VeraCryptHeader> TryDecryptAndValidateAsync(byte[] region, byte[] passwordBytes, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm, bool fromBackup, int pim, CancellationToken cancellationToken)
         {
             return Task.Run(() =>
@@ -533,6 +633,28 @@ namespace uk.andyjohnson.Asiri.Core
         private static ushort ReadUInt16BE(byte[] d, int offset)
         {
             return (ushort)((d[offset] << 8) | d[offset + 1]);
+        }
+
+        private static void WriteUInt16BE(byte[] d, int offset, ushort value)
+        {
+            d[offset] = (byte)(value >> 8);
+            d[offset + 1] = (byte)value;
+        }
+
+        private static void WriteUInt32BE(byte[] d, int offset, uint value)
+        {
+            d[offset] = (byte)(value >> 24);
+            d[offset + 1] = (byte)(value >> 16);
+            d[offset + 2] = (byte)(value >> 8);
+            d[offset + 3] = (byte)value;
+        }
+
+        private static void WriteInt64BE(byte[] d, int offset, long value)
+        {
+            for (var i = 0; i < 8; i++)
+            {
+                d[offset + i] = (byte)(value >> (56 - 8 * i));
+            }
         }
 
         private static uint ReadUInt32BE(byte[] d, int offset)
