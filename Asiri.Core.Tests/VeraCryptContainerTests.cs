@@ -55,8 +55,8 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         [MemberData(nameof(TestContainers.All), MemberType = typeof(TestContainers))]
         public async Task OpenAsync_WithCorrectPassword_SetsAlgorithmAndHashAlgorithmOnContainer(TestContainers.ContainerFixture fixture)
         {
-            // Algorithm and HashAlgorithm are given directly by the caller on this (explicit-
-            // parameters) overload, but were previously never actually asserted back on the returned
+            // fixture.OpenAsync() supplies Algorithm and HashAlgorithm directly rather than relying
+            // on auto-detection, but were previously never actually asserted back on the returned
             // container - this closes that gap for both properties in one pass.
             var container = await fixture.OpenAsync();
             try
@@ -74,35 +74,28 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         public async Task OpenAsync_NullPath_ThrowsArgumentNullException()
         {
             await Assert.ThrowsAsync<ArgumentNullException>(() =>
-                VeraCryptContainer.OpenAsync(null!, TestContainers.AesNtfs.Password, TestContainers.AesNtfs.Algorithm, TestContainers.AesNtfs.HashAlgorithm, TestContainers.AesNtfs.FilesystemType));
+                VeraCryptContainer.OpenAsync(null!, TestContainers.AesNtfs.Password, new OpenOptions { Algorithm = TestContainers.AesNtfs.Algorithm, HashAlgorithm = TestContainers.AesNtfs.HashAlgorithm }));
         }
 
         [Fact]
         public async Task OpenAsync_NullPassword_ThrowsArgumentNullException()
         {
             await Assert.ThrowsAsync<ArgumentNullException>(() =>
-                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, null!, TestContainers.AesNtfs.Algorithm, TestContainers.AesNtfs.HashAlgorithm, TestContainers.AesNtfs.FilesystemType));
+                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, null!, new OpenOptions { Algorithm = TestContainers.AesNtfs.Algorithm, HashAlgorithm = TestContainers.AesNtfs.HashAlgorithm }));
         }
 
         [Fact]
         public async Task OpenAsync_UnsupportedAlgorithm_ThrowsArgumentException()
         {
             await Assert.ThrowsAsync<ArgumentException>(() =>
-                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, TestContainers.AesNtfs.Password, (CryptoAlgorithm)99, TestContainers.AesNtfs.HashAlgorithm, TestContainers.AesNtfs.FilesystemType));
+                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, TestContainers.AesNtfs.Password, new OpenOptions { Algorithm = (CryptoAlgorithm)99, HashAlgorithm = TestContainers.AesNtfs.HashAlgorithm }));
         }
 
         [Fact]
         public async Task OpenAsync_UnsupportedHashAlgorithm_ThrowsArgumentException()
         {
             await Assert.ThrowsAsync<ArgumentException>(() =>
-                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, TestContainers.AesNtfs.Password, TestContainers.AesNtfs.Algorithm, (HashAlgorithm)99, TestContainers.AesNtfs.FilesystemType));
-        }
-
-        [Fact]
-        public async Task OpenAsync_UnsupportedFileSystemType_ThrowsArgumentException()
-        {
-            await Assert.ThrowsAsync<ArgumentException>(() =>
-                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, TestContainers.AesNtfs.Password, TestContainers.AesNtfs.Algorithm, TestContainers.AesNtfs.HashAlgorithm, (FileSystemType)99));
+                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, TestContainers.AesNtfs.Password, new OpenOptions { Algorithm = TestContainers.AesNtfs.Algorithm, HashAlgorithm = (HashAlgorithm)99 }));
         }
 
         [Fact]
@@ -111,14 +104,14 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             var missing = new FileInfo(Path.Combine(TestContainers.AesNtfs.ContainerFile.DirectoryName!, "does-not-exist.hc"));
 
             await Assert.ThrowsAsync<ArgumentException>(() =>
-                VeraCryptContainer.OpenAsync(missing, TestContainers.AesNtfs.Password, TestContainers.AesNtfs.Algorithm, TestContainers.AesNtfs.HashAlgorithm, TestContainers.AesNtfs.FilesystemType));
+                VeraCryptContainer.OpenAsync(missing, TestContainers.AesNtfs.Password, new OpenOptions { Algorithm = TestContainers.AesNtfs.Algorithm, HashAlgorithm = TestContainers.AesNtfs.HashAlgorithm }));
         }
 
         [Fact]
         public async Task OpenAsync_WrongPassword_ThrowsInvalidOperationException()
         {
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, "definitely-wrong-password", TestContainers.AesNtfs.Algorithm, TestContainers.AesNtfs.HashAlgorithm, TestContainers.AesNtfs.FilesystemType));
+                VeraCryptContainer.OpenAsync(TestContainers.AesNtfs.ContainerFile, "definitely-wrong-password", new OpenOptions { Algorithm = TestContainers.AesNtfs.Algorithm, HashAlgorithm = TestContainers.AesNtfs.HashAlgorithm }));
         }
 
         [Theory]

@@ -4,9 +4,9 @@ This document takes precedence over all other instructions, except that each pro
 has its own `AGENT.md`, which takes precedence over this document for work within that project.
 
 ## What this project is
-Read-only access to VeraCrypt encrypted file containers, from .NET, without depending on the
-VeraCrypt application itself. See `README.md` for the full picture, including what is and isn't
-supported.
+Access — read, and opt-in write — to VeraCrypt encrypted file containers, from .NET, without
+depending on the VeraCrypt application itself. See `README.md` for the full picture, including what
+is and isn't supported.
 
 ## Solution structure
 - `Asiri.Abstractions` — dependency-free filesystem contracts (`IDirectory`, `IFile`,
@@ -20,8 +20,18 @@ supported.
   would use it. See `Asiri.ContainerBrowser/AGENT.md`.
 
 ## Project-wide scope
-- Implement read-only access to VeraCrypt encrypted file containers.
-- Do not implement write support.
+- Implement read access to VeraCrypt encrypted file containers.
+- Implement write access to VeraCrypt encrypted file containers - opt-in and off by default, gated
+  solely by `ContainerAccessMode`, fixed for the whole session by whichever mode the container was
+  opened or created with (no separate runtime arm/disarm switch) - and limited to fixed-size
+  containers: do not implement growing or shrinking a container's size.
+- Implement changing an already-open, `ContainerAccessMode.ReadWrite` container's password,
+  keyfiles, PIM, and/or hash algorithm (`VeraCryptContainer.ChangeCredentialsAsync`) without
+  touching its contents - the master/secondary key never changes, only the header's own encryption
+  key does. The encryption algorithm itself cannot change this way, matching VeraCrypt's own
+  behaviour. Unlike VeraCrypt, do not implement its optional multi-pass anti-forensic overwrite of
+  the old header, and do not preserve the container file's own timestamps - both deliberate scope
+  reductions, not oversights.
 - Do not implement support for encrypted partitions or drives.
 - Do not implement hidden volumes.
 - Supported encryption algorithms: AES, Serpent, Twofish, Camellia, and the cascades AES-Twofish,

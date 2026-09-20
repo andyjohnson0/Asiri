@@ -3,9 +3,105 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:svgc="http://sharpvectors.codeplex.com/svgc/"
         Title="Asiri Container Browser" Height="600" Width="900">
+    <Window.Resources>
+        <ContextMenu x:Key="DirectoryContextMenu" Opened="DirectoryContextMenu_Opened">
+            <MenuItem Header="New Subdirectory..." Click="NewSubdirectory_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/folder-plus.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="New File..." Click="NewFile_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/file-earmark-plus.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Header="Rename..." Click="Rename_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/pencil.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="Delete" Click="Delete_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/trash.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="Move to..." Click="MoveTo_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/arrows-move.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Tag="Paste" Header="Paste" Click="Paste_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/clipboard.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Tag="Properties" Header="Properties..." Click="EditProperties_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/gear.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+        </ContextMenu>
+
+        <ContextMenu x:Key="RootContextMenu" Opened="RootContextMenu_Opened">
+            <MenuItem Header="New Subdirectory..." Click="NewSubdirectory_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/folder-plus.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="New File..." Click="NewFile_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/file-earmark-plus.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Tag="Paste" Header="Paste" Click="Paste_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/clipboard.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Tag="Properties" Header="Properties..." Click="EditProperties_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/gear.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+        </ContextMenu>
+
+        <ContextMenu x:Key="FileContextMenu" Opened="FileContextMenu_Opened">
+            <MenuItem Header="Rename..." Click="Rename_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/pencil.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="Delete" Click="Delete_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/trash.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+            <MenuItem Header="Move to..." Click="MoveTo_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/arrows-move.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Tag="Properties" Header="Properties..." Click="EditProperties_Click">
+                <MenuItem.Icon>
+                    <svgc:SvgViewbox Source="Icons/gear.svg" Width="16" Height="16"/>
+                </MenuItem.Icon>
+            </MenuItem>
+        </ContextMenu>
+    </Window.Resources>
     <DockPanel>
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
+                <MenuItem x:Name="CreateContainerMenuItem" Header="_New Container..." Click="CreateContainerMenuItem_Click">
+                    <MenuItem.Icon>
+                        <svgc:SvgViewbox Source="Icons/hdd.svg" Width="16" Height="16"/>
+                    </MenuItem.Icon>
+                </MenuItem>
                 <MenuItem x:Name="OpenMenuItem" Header="_Open Container..." Click="OpenMenuItem_Click">
                     <MenuItem.Icon>
                         <svgc:SvgViewbox Source="Icons/folder2-open.svg" Width="16" Height="16"/>
@@ -14,6 +110,17 @@
                 <MenuItem x:Name="CloseMenuItem" Header="_Close Container" Click="CloseMenuItem_Click" IsEnabled="False">
                     <MenuItem.Icon>
                         <svgc:SvgViewbox Source="Icons/x-circle.svg" Width="16" Height="16"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem x:Name="DumpImageMenuItem" Header="_Export Filesystem Image..." Click="DumpImageMenuItem_Click" IsEnabled="False">
+                    <MenuItem.Icon>
+                        <svgc:SvgViewbox Source="Icons/file-earmark-arrow-down.svg" Width="16" Height="16"/>
+                    </MenuItem.Icon>
+                </MenuItem>
+                <Separator/>
+                <MenuItem x:Name="ChangePasswordMenuItem" Header="Change _Credentials..." Click="ChangePasswordMenuItem_Click" IsEnabled="False">
+                    <MenuItem.Icon>
+                        <svgc:SvgViewbox Source="Icons/key.svg" Width="16" Height="16"/>
                     </MenuItem.Icon>
                 </MenuItem>
                 <Separator/>
@@ -25,6 +132,10 @@
             <StatusBarItem>
                 <TextBlock x:Name="StatusText" Text="No container open."/>
             </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <TextBlock x:Name="WriteStatusText" Text=""/>
+            </StatusBarItem>
         </StatusBar>
 
         <Grid>
@@ -35,10 +146,28 @@
             </Grid.ColumnDefinitions>
 
             <TreeView x:Name="ContainerTreeView" Grid.Column="0"
-                      SelectedItemChanged="ContainerTreeView_SelectedItemChanged">
+                      SelectedItemChanged="ContainerTreeView_SelectedItemChanged"
+                      ContextMenuOpening="ContainerTreeView_ContextMenuOpening"
+                      AllowDrop="True" DragOver="ContainerTreeView_DragOver" Drop="ContainerTreeView_Drop">
                 <TreeView.ItemContainerStyle>
                     <Style TargetType="TreeViewItem">
+                        <EventSetter Event="PreviewMouseLeftButtonDown" Handler="TreeViewItem_PreviewMouseLeftButtonDown"/>
+                        <EventSetter Event="PreviewMouseMove" Handler="TreeViewItem_PreviewMouseMove"/>
                         <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsDirectory}" Value="True">
+                                <Setter Property="ContextMenu" Value="{StaticResource DirectoryContextMenu}"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsDirectory}" Value="False">
+                                <Setter Property="ContextMenu" Value="{StaticResource FileContextMenu}"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsPlaceholder}" Value="True">
+                                <Setter Property="ContextMenu" Value="{x:Null}"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsRoot}" Value="True">
+                                <Setter Property="ContextMenu" Value="{StaticResource RootContextMenu}"/>
+                            </DataTrigger>
+                        </Style.Triggers>
                     </Style>
                 </TreeView.ItemContainerStyle>
                 <TreeView.ItemTemplate>

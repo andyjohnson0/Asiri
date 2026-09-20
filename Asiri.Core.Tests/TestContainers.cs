@@ -315,7 +315,8 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             /// <summary>Opens this container via the full public VeraCryptContainer.OpenAsync API.</summary>
             public Task<VeraCryptContainer> OpenAsync()
             {
-                return VeraCryptContainer.OpenAsync(ContainerFile, Password, Algorithm, HashAlgorithm, FilesystemType, Pim, KeyFiles);
+                return VeraCryptContainer.OpenAsync(
+                    ContainerFile, Password, new OpenOptions { Algorithm = Algorithm, HashAlgorithm = HashAlgorithm, Pim = Pim, KeyFiles = KeyFiles });
             }
 
             // Used by the xUnit test runner to label [Theory] cases in output; without this, every

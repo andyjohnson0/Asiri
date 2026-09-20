@@ -61,7 +61,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             // a genuinely wrong PIM, not just an unspecified one. A single (correct algorithm, correct
             // hash, wrong PIM) attempt costs one PBKDF2 call, not a search - this stays cheap.
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, fixture.Algorithm, fixture.HashAlgorithm, fixture.FilesystemType));
+                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm }));
         }
 
         [Fact]
@@ -69,9 +69,9 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         {
             var fixture = TestContainers.AesPim5ExFat;
             var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
-                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, fixture.Algorithm, fixture.HashAlgorithm, fixture.FilesystemType, pim: -1));
+                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, Pim = -1 }));
 
-            Assert.Equal("pim", exception.ParamName);
+            Assert.Equal("options", exception.ParamName);
         }
 
         /// <summary>
@@ -86,7 +86,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         [MemberData(nameof(PimFixtures))]
         public async Task OpenAsync_PasswordOnly_WithCorrectPim_DetectsAlgorithmAndOpensContainer(TestContainers.ContainerFixture fixture)
         {
-            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, fixture.Pim);
+            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Pim = fixture.Pim });
             try
             {
                 Assert.Equal(fixture.Algorithm, container.Algorithm);
@@ -105,9 +105,9 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         {
             var fixture = TestContainers.AesPim5ExFat;
             var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
-                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, pim: -1));
+                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Pim = -1 }));
 
-            Assert.Equal("pim", exception.ParamName);
+            Assert.Equal("options", exception.ParamName);
         }
 
         public static IEnumerable<object[]> PimFixtures()

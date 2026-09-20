@@ -1,0 +1,37 @@
+<Window x:Class="uk.andyjohnson.Asiri.ContainerBrowser.MoveToDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:svgc="http://sharpvectors.codeplex.com/svgc/"
+        Title="Move to..."
+        Width="360" Height="440"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+    <DockPanel Margin="16">
+        <TextBlock DockPanel.Dock="Top" Text="Choose a destination directory:" Margin="0,0,0,8"/>
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button x:Name="OkButton" Content="OK" IsDefault="True" IsEnabled="False" Width="75" Margin="0,0,8,0" Click="OkButton_Click"/>
+            <Button Content="Cancel" IsCancel="True" Width="75"/>
+        </StackPanel>
+        <TreeView x:Name="DestinationTreeView" SelectedItemChanged="DestinationTreeView_SelectedItemChanged">
+            <TreeView.ItemContainerStyle>
+                <Style TargetType="TreeViewItem">
+                    <EventSetter Event="Loaded" Handler="TreeViewItem_Loaded"/>
+                    <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsDirectory}" Value="False">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TreeView.ItemContainerStyle>
+            <TreeView.ItemTemplate>
+                <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                    <StackPanel Orientation="Horizontal">
+                        <svgc:SvgViewbox Source="{Binding IconUri}" Width="16" Height="16" Margin="0,0,6,0"/>
+                        <TextBlock Text="{Binding Name}"/>
+                    </StackPanel>
+                </HierarchicalDataTemplate>
+            </TreeView.ItemTemplate>
+        </TreeView>
+    </DockPanel>
+</Window>

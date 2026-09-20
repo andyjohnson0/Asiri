@@ -30,6 +30,23 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         }
 
         [Fact]
+        public void DeriveKey_Sha256_MatchesIndependentRfc2898Implementation()
+        {
+            // Sha512 already has this cross-check above; Sha256 is added here too since both now
+            // go through NativeHmacPrf/Pbkdf2BlockEngine (see Pbkdf2PrfFactory) rather than
+            // BouncyCastle, and this is the only independent (non-BouncyCastle) oracle available.
+            var password = Encoding.UTF8.GetBytes("correct horse battery staple");
+            var salt = Encoding.UTF8.GetBytes("some-salt-value-1234567890123456");
+            const int iterations = 1000;
+            const int keyLengthBits = 512;
+
+            var actual = InvokeDeriveKey(HashAlgorithm.Sha256, password, salt, iterations, keyLengthBits);
+
+            var expected = Rfc2898DeriveBytes.Pbkdf2(password, salt, iterations, HashAlgorithmName.SHA256, keyLengthBits / 8);
+            Assert.Equal(expected, actual);
+        }
+
+        [Fact]
         public void DeriveKey_DifferentPasswords_ProduceDifferentKeys()
         {
             // Confirms the preceding cross-check is actually sensitive to the password, rather than

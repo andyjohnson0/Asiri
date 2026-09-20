@@ -3,7 +3,7 @@
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
     <RootNamespace>uk.andyjohnson.Asiri.Core</RootNamespace>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <Authors>Andrew Johnson</Authors>
     <Description>Standalone, read-only access to VeraCrypt encrypted file containers.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -18,6 +18,7 @@
     <PackageReference Include="LTRData.DiscUtils.Fat" Version="1.0.88" />
     <PackageReference Include="LTRData.DiscUtils.Ntfs" Version="1.0.88" />
     <PackageReference Include="LTRData.DiscUtils.ExFat" Version="1.0.88" />
+    <PackageReference Include="LTRData.DiscUtils.Vhd" Version="1.0.88" />
   </ItemGroup>
 
   <ItemGroup>

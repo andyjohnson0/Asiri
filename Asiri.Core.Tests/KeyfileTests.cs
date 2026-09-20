@@ -85,7 +85,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         {
             var fixture = TestContainers.AesKf1ExFat;
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, fixture.Algorithm, fixture.HashAlgorithm, fixture.FilesystemType));
+                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm }));
         }
 
         [Fact]
@@ -97,7 +97,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             var fixture = TestContainers.AesKf1ExFat;
             var wrongKeyFile = TestContainers.AesKf1Kf2ExFat.KeyFiles[1]; // Keyfile2.bin
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, fixture.Algorithm, fixture.HashAlgorithm, fixture.FilesystemType, keyFiles: new[] { wrongKeyFile }));
+                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, KeyFiles = new[] { wrongKeyFile } }));
         }
 
         [Fact]
@@ -106,7 +106,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             var fixture = TestContainers.AesKf1ExFat;
             var missingKeyFile = new FileInfo(Path.Combine(fixture.ContainerFile.DirectoryName!, "does-not-exist.bin"));
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, fixture.Algorithm, fixture.HashAlgorithm, fixture.FilesystemType, keyFiles: new[] { missingKeyFile }));
+                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, KeyFiles = new[] { missingKeyFile } }));
             Assert.Contains("Unable to open keyfile", exception.Message);
         }
 
@@ -119,7 +119,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             try
             {
                 var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
-                    VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, fixture.Algorithm, fixture.HashAlgorithm, fixture.FilesystemType, keyFiles: new[] { new FileInfo(emptyKeyFilePath) }));
+                    VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, KeyFiles = new[] { new FileInfo(emptyKeyFilePath) } }));
                 Assert.Contains("empty", exception.Message, StringComparison.OrdinalIgnoreCase);
             }
             finally
@@ -133,7 +133,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         {
             var fixture = TestContainers.AesKf1ExFat;
             var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
-                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, fixture.Algorithm, fixture.HashAlgorithm, fixture.FilesystemType, keyFiles: new FileInfo?[] { null }!));
+                VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, KeyFiles = new FileInfo?[] { null }! }));
             Assert.Equal("keyFiles", exception.ParamName);
         }
 
@@ -147,7 +147,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         public async Task OpenAsync_PasswordOnly_WithCorrectKeyFiles_DetectsAlgorithmAndOpensContainer()
         {
             var fixture = TestContainers.AesKf1ExFat;
-            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, pim: 0, keyFiles: fixture.KeyFiles);
+            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Pim = 0, KeyFiles = fixture.KeyFiles });
             try
             {
                 Assert.Equal(fixture.Algorithm, container.Algorithm);

@@ -35,5 +35,23 @@ namespace uk.andyjohnson.Asiri.Abstractions
         /// </summary>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
         Task<Stream> OpenReadAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Opens a writable stream over the file's contents (truncating any existing content, the
+        /// same as <see cref="System.IO.FileMode.Create"/>), for writing a large file incrementally
+        /// rather than supplying it all at once. Requires the container to currently be open for
+        /// writing at the moment this is called - but that requirement is checked only once, here:
+        /// if writing is disarmed later while this stream is still open and in use, the stream itself
+        /// does not retroactively stop working. The returned stream becomes unusable if the container
+        /// is closed while it is still open, the same as <see cref="OpenReadAsync"/>.
+        /// </summary>
+        /// <param name="cancellationToken">A token to cancel the operation.</param>
+        Task<Stream> OpenWriteAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Deletes this file. Requires the container to currently be open for writing.
+        /// </summary>
+        /// <param name="cancellationToken">A token to cancel the operation.</param>
+        Task DeleteAsync(CancellationToken cancellationToken = default);
     }
 }

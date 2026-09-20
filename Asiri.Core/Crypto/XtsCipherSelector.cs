@@ -82,5 +82,73 @@ namespace uk.andyjohnson.Asiri.Core.Crypto
                     throw new ArgumentException($"Unsupported component cipher: {cipher}.", nameof(cipher));
             }
         }
+
+        /// <summary>
+        /// Encrypts a single data unit using the cipher(s) identified by <paramref name="algorithm"/>
+        /// - the exact inverse of <see cref="Decrypt"/>: decrypting <see cref="Encrypt"/>'s output
+        /// with the same algorithm and keys returns the original plaintext. For a cascade, ciphers
+        /// are applied in <see cref="CascadeDefinitions.GetEncryptOrder"/> (the reverse of decryption
+        /// order), and - since the key material's segment layout is fixed to encryption order,
+        /// regardless of which direction is being performed - each cipher's own segment is at the
+        /// same position <paramref name="dataKey"/>/<paramref name="tweakKey"/> segment index as its
+        /// position in the encrypt order itself, unlike <see cref="Decrypt"/>'s reversed indexing.
+        /// </summary>
+        /// <param name="algorithm">The encryption algorithm to encrypt with.</param>
+        /// <param name="plainText">The plaintext to encrypt.</param>
+        /// <param name="dataKey">The key material used to encrypt the data blocks.</param>
+        /// <param name="tweakKey">The key material used to encrypt the data unit tweak.</param>
+        /// <param name="dataUnitNumber">
+        /// The sequence number of the data unit. As with <see cref="Decrypt"/>, the same value is
+        /// used, unchanged, for every cascaded cipher.
+        /// </param>
+        public static byte[] Encrypt(CryptoAlgorithm algorithm, byte[] plainText, byte[] dataKey, byte[] tweakKey, long dataUnitNumber)
+        {
+            var encryptOrder = CascadeDefinitions.GetEncryptOrder(algorithm);
+            if (encryptOrder.Length == 1)
+            {
+                return EncryptSingle(encryptOrder[0], plainText, dataKey, tweakKey, dataUnitNumber);
+            }
+
+            var componentSize = CascadeDefinitions.ComponentKeySize;
+            var expectedKeyLength = componentSize * encryptOrder.Length;
+            if (dataKey.Length != expectedKeyLength || tweakKey.Length != expectedKeyLength)
+            {
+                throw new ArgumentException(
+                    $"Key material for {algorithm} cascade must be {expectedKeyLength} bytes; " +
+                    $"got data key {dataKey.Length}, tweak key {tweakKey.Length}.");
+            }
+
+            var result = plainText;
+            for (var i = 0; i < encryptOrder.Length; i++)
+            {
+                var cipher = encryptOrder[i];
+                var segmentOffset = i * componentSize;
+
+                var componentDataKey = new byte[componentSize];
+                var componentTweakKey = new byte[componentSize];
+                Buffer.BlockCopy(dataKey, segmentOffset, componentDataKey, 0, componentSize);
+                Buffer.BlockCopy(tweakKey, segmentOffset, componentTweakKey, 0, componentSize);
+
+                result = EncryptSingle(cipher, result, componentDataKey, componentTweakKey, dataUnitNumber);
+            }
+            return result;
+        }
+
+        private static byte[] EncryptSingle(CryptoAlgorithm cipher, byte[] plainText, byte[] dataKey, byte[] tweakKey, long dataUnitNumber)
+        {
+            switch (cipher)
+            {
+                case CryptoAlgorithm.Aes:
+                    return XtsAesCipher.Encrypt(plainText, dataKey, tweakKey, dataUnitNumber);
+                case CryptoAlgorithm.Serpent:
+                    return XtsSerpentCipher.Encrypt(plainText, dataKey, tweakKey, dataUnitNumber);
+                case CryptoAlgorithm.Twofish:
+                    return XtsTwofishCipher.Encrypt(plainText, dataKey, tweakKey, dataUnitNumber);
+                case CryptoAlgorithm.Camellia:
+                    return XtsCamelliaCipher.Encrypt(plainText, dataKey, tweakKey, dataUnitNumber);
+                default:
+                    throw new ArgumentException($"Unsupported component cipher: {cipher}.", nameof(cipher));
+            }
+        }
     }
 }

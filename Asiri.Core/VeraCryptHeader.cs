@@ -89,5 +89,15 @@ namespace uk.andyjohnson.Asiri.Core
         /// rather than the primary header at the start.
         /// </summary>
         public bool FromBackup { get; internal set; }
+
+        /// <summary>
+        /// The full decrypted, but not field-parsed, 448-byte header body. Kept so a header can be
+        /// re-encrypted verbatim - a password/keyfile/PIM/hash change (see
+        /// <see cref="VeraCryptContainer.ChangeCredentialsAsync"/>) - without reconstructing any field:
+        /// every plaintext byte is unchanged by that operation, only the salt and the key deriving
+        /// its encryption change. Not exposed publicly - an implementation detail, not something
+        /// external callers should need.
+        /// </summary>
+        internal byte[] DecryptedBytes { get; set; } = Array.Empty<byte>();
     }
 }
