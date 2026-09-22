@@ -18,6 +18,9 @@ is and isn't supported.
   `Asiri.Core.Tests/AGENT.md` for the test container catalogue and verification checklist.
 - `Asiri.ContainerBrowser` — a WPF reference application demonstrating `Asiri.Core` as a consumer
   would use it. See `Asiri.ContainerBrowser/AGENT.md`.
+- `Asiri.Export` — exports a container's decrypted filesystem to a real disk image (raw, or wrapped
+  in a VHD). Kept separate from `Asiri.Core` so its DiscUtils virtual-disk dependency isn't forced
+  on every `Asiri.Core` consumer. See `Asiri.Export/AGENT.md`.
 
 ## Project-wide scope
 - Implement read access to VeraCrypt encrypted file containers.

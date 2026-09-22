@@ -12,8 +12,6 @@ using DiscUtils.ExFat.Internal;
 using DiscUtils.ExFat.Internal.Filesystem;
 using DiscUtils.Fat;
 using DiscUtils.Ntfs;
-using DiscUtils.Partitions;
-using DiscUtils.Vhd;
 using uk.andyjohnson.Asiri.Abstractions;
 using uk.andyjohnson.Asiri.Core.Crypto;
 using uk.andyjohnson.Asiri.Core.Filesystem.ExFat;
@@ -241,48 +239,6 @@ namespace uk.andyjohnson.Asiri.Core
     }
 
     /// <summary>
-    /// The output format for <see cref="VeraCryptContainer.ExportFileSystemAsync"/> - a diagnostic export
-    /// of a container's decrypted filesystem, for handing to a tool, person, or AI session entirely
-    /// outside Asiri (see that method's own remarks for why).
-    /// </summary>
-    public enum FileSystemExportFormat
-    {
-        /// <summary>
-        /// The whole decrypted filesystem, written as a bare sequence of bytes with no wrapper of any
-        /// kind - exactly what DiscUtils formatted and reads from, nothing added or removed.
-        /// </summary>
-        RawImage,
-
-        /// <summary>
-        /// Only the first 512 bytes (the volume's boot sector) of the decrypted filesystem, as a bare
-        /// sequence of bytes - a cheap way to eyeball just that, for the same reason
-        /// <see cref="VeraCryptContainer.DetectFileSystemTypeAsync"/> only ever looks there itself.
-        /// </summary>
-        RawImageBootSectorOnly,
-
-        /// <summary>
-        /// The whole decrypted filesystem, wrapped in a fixed-size VHD with no partition table - a
-        /// single, unpartitioned "superfloppy"-style virtual disk whose own first sector is the
-        /// filesystem's boot sector, matching exactly how the filesystem is laid out inside the real
-        /// encrypted container. Windows can mount a VHD natively (no VeraCrypt, no Asiri involved at
-        /// all), which is the point: it lets the exported filesystem be tested for real-OS validity
-        /// completely independently of everything else in Asiri's own pipeline.
-        /// </summary>
-        Vhd,
-
-        /// <summary>
-        /// The same idea as <see cref="Vhd"/>, but with a single MBR partition (of the appropriate
-        /// type for the container's own <see cref="VeraCryptContainer.FileSystemType"/>) wrapped
-        /// around the filesystem, rather than placing it directly at the start of the disk. Exists
-        /// alongside <see cref="Vhd"/> specifically to separate two variables while diagnosing why a
-        /// real OS doesn't recognise a container's filesystem: whether the filesystem's own content is
-        /// at fault, or whether a partitioned-vs-unpartitioned disk layout is.
-        /// </summary>
-        VhdWithPartitionTable
-    }
-
-
-    /// <summary>
     /// Provides access to the contents of a VeraCrypt encrypted file container, read-only by default.
     /// </summary>
     /// <remarks>
@@ -291,7 +247,7 @@ namespace uk.andyjohnson.Asiri.Core
     /// <see cref="ContainerAccessMode.ReadWrite"/> - modifies the container file in place, with no
     /// undo. Only enable writing on a container you have a backup of.
     /// </remarks>
-    public sealed class VeraCryptContainer
+    public sealed class VeraCryptContainer : IFileSystemExportSource
     {
         private readonly DecryptedBlockDeviceStream _stream;
         private readonly DiscFileSystem _fileSystem;
@@ -1300,125 +1256,33 @@ namespace uk.andyjohnson.Asiri.Core
         public ContainerAccessMode AccessMode => _lifetime.MaxAccessMode;
 
         /// <summary>
-        /// Exports the container's decrypted filesystem to <paramref name="destination"/>, in the
-        /// given <paramref name="format"/> - none of it encrypted, and none of it interpreted by
-        /// Asiri or DiscUtils on the way out. Added specifically to let that plaintext be handed to
-        /// tools, reviewers, or a real OS's own mount path entirely outside Asiri, to help pin down
-        /// why a container this library creates isn't recognised by a real OS - a question Asiri's
-        /// own read path, which agrees with itself by construction, can't answer on its own.
+        /// The total length, in bytes, of the decrypted filesystem - see
+        /// <see cref="IFileSystemExportSource"/>, implemented explicitly so it isn't part of this
+        /// class's own public surface: it exists for <c>Asiri.Export</c>'s <c>FileSystemExtractor</c>,
+        /// not for ordinary callers.
         /// </summary>
-        /// <param name="destination">
-        /// The stream to write the export to. Written to starting at its current position; never
-        /// sought or resized by this method.
-        /// </param>
-        /// <param name="format">The export format - see <see cref="FileSystemExportFormat"/>.</param>
-        /// <param name="cancellationToken">A token to cancel the operation.</param>
-        public Task ExportFileSystemAsync(Stream destination, FileSystemExportFormat format = FileSystemExportFormat.RawImage, CancellationToken cancellationToken = default)
+        long IFileSystemExportSource.Length => _stream.Length;
+
+        /// <summary>See <see cref="IFileSystemExportSource"/>'s own remarks on explicit implementation.</summary>
+        FileSystemType IFileSystemExportSource.FileSystemType => FileSystemType;
+
+        /// <summary>See <see cref="IFileSystemExportSource"/>'s own remarks on explicit implementation.</summary>
+        Task IFileSystemExportSource.CopyBytesAsync(Stream destination, long byteCount, CancellationToken cancellationToken)
         {
             if (destination == null)
             {
                 throw new ArgumentNullException(nameof(destination));
             }
-            switch (format)
-            {
-                case FileSystemExportFormat.RawImage:
-                case FileSystemExportFormat.RawImageBootSectorOnly:
-                case FileSystemExportFormat.Vhd:
-                case FileSystemExportFormat.VhdWithPartitionTable:
-                    break;
-                default:
-                    throw new ArgumentException($"Unsupported export format: {format}.", nameof(format));
-            }
             _lifetime.ThrowIfClosed();
 
-            return ExportFileSystemAsyncCore(destination, format, cancellationToken);
-        }
-
-        private Task ExportFileSystemAsyncCore(Stream destination, FileSystemExportFormat format, CancellationToken cancellationToken)
-        {
-            switch (format)
-            {
-                case FileSystemExportFormat.RawImage:
-                    return CopyRawBytesAsync(destination, _stream.Length, cancellationToken);
-                case FileSystemExportFormat.RawImageBootSectorOnly:
-                    return CopyRawBytesAsync(destination, DefaultSectorSize, cancellationToken);
-                case FileSystemExportFormat.Vhd:
-                    return WriteVhdAsync(destination, cancellationToken);
-                case FileSystemExportFormat.VhdWithPartitionTable:
-                    return WriteVhdWithPartitionTableAsync(destination, cancellationToken);
-                default:
-                    // Unreachable: format is already caller-validated by ExportFileSystemAsync.
-                    throw new ArgumentException($"Unsupported export format: {format}.", nameof(format));
-            }
-        }
-
-        /// <summary>
-        /// Wraps the container's decrypted filesystem in a fixed-size VHD with no partition table -
-        /// see <see cref="FileSystemExportFormat.Vhd"/>'s own remarks for why no partition table.
-        /// </summary>
-        private async Task WriteVhdAsync(Stream destination, CancellationToken cancellationToken)
-        {
-            var capacity = _stream.Length;
-            using (var disk = Disk.InitializeFixed(destination, DiscUtils.Streams.Ownership.None, capacity))
-            {
-                await CopyRawBytesAsync(disk.Content, capacity, cancellationToken).ConfigureAwait(false);
-            }
-        }
-
-        /// <summary>
-        /// The extra space reserved, beyond the filesystem's own size, when building a partitioned
-        /// VHD - enough to comfortably cover the MBR plus BiosPartitionTable's own alignment gap
-        /// before the partition's first sector (conventionally around 1 MiB), without needing to
-        /// compute the exact figure ourselves.
-        /// </summary>
-        private const long VhdPartitionOverhead = 4 * 1024 * 1024;
-
-        /// <summary>
-        /// Wraps the container's decrypted filesystem in a fixed-size VHD with a single MBR partition
-        /// around it - see <see cref="FileSystemExportFormat.VhdWithPartitionTable"/>'s own remarks.
-        /// </summary>
-        private async Task WriteVhdWithPartitionTableAsync(Stream destination, CancellationToken cancellationToken)
-        {
-            var filesystemSize = _stream.Length;
-            var capacity = filesystemSize + VhdPartitionOverhead;
-
-            using (var disk = Disk.InitializeFixed(destination, DiscUtils.Streams.Ownership.None, capacity))
-            {
-                BiosPartitionTable.Initialize(disk, GetPartitionType(FileSystemType));
-                using (var partitionStream = disk.Partitions[0].Open())
-                {
-                    await CopyRawBytesAsync(partitionStream, filesystemSize, cancellationToken).ConfigureAwait(false);
-                }
-            }
-        }
-
-        /// <summary>
-        /// The MBR partition type byte real Windows-formatted disks conventionally use for a given
-        /// filesystem. MBR has no dedicated exFAT type - real exFAT partitions typically use GPT's own
-        /// "Basic Data" type instead - so this maps exFAT to the same type NTFS uses (0x07), matching
-        /// how MBR-partitioned exFAT volumes are conventionally marked in practice.
-        /// </summary>
-        private static WellKnownPartitionType GetPartitionType(FileSystemType fileSystemType)
-        {
-            switch (fileSystemType)
-            {
-                case FileSystemType.Fat:
-                    return WellKnownPartitionType.WindowsFat;
-                case FileSystemType.Ntfs:
-                case FileSystemType.ExFat:
-                    return WellKnownPartitionType.WindowsNtfs;
-                default:
-                    // Unreachable: fileSystemType is always a value this container was itself opened
-                    // or created with, already validated at that point.
-                    throw new ArgumentException($"Unsupported filesystem type: {fileSystemType}.", nameof(fileSystemType));
-            }
+            return CopyBytesAsync(destination, byteCount, cancellationToken);
         }
 
         /// <summary>
         /// Copies <paramref name="byteCount"/> bytes of the container's decrypted filesystem, from
         /// the start, to <paramref name="destination"/>.
         /// </summary>
-        private async Task CopyRawBytesAsync(Stream destination, long byteCount, CancellationToken cancellationToken)
+        private async Task CopyBytesAsync(Stream destination, long byteCount, CancellationToken cancellationToken)
         {
             var remaining = byteCount;
             var buffer = new byte[81920];

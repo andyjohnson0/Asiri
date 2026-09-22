@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>uk.andyjohnson.Asiri.Export.Tests</RootNamespace>
+    <Version>0.3.0</Version>
+    <Authors>Andrew Johnson</Authors>
+    <Description>Tests for Asiri.Export.</Description>
+    <RepositoryUrl>https://github.com/andyjohnson0/Asiri</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Asiri.Abstractions\Asiri.Abstractions.csproj" />
+    <ProjectReference Include="..\Asiri.Core\Asiri.Core.csproj" />
+    <ProjectReference Include="..\Asiri.Core.Tests\Asiri.Core.Tests.csproj" />
+    <ProjectReference Include="..\Asiri.Export\Asiri.Export.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

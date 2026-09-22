@@ -2,13 +2,13 @@ using System;
 using System.IO;
 using System.Windows;
 using Microsoft.Win32;
-using uk.andyjohnson.Asiri.Core;
+using uk.andyjohnson.Asiri.Export;
 
 namespace uk.andyjohnson.Asiri.ContainerBrowser
 {
     /// <summary>
     /// Modal dialog prompting for the output path and format of a
-    /// <see cref="VeraCryptContainer.ExportFileSystemAsync"/> export - the currently open container's
+    /// <see cref="FileSystemExtractor.ExportAsync"/> export - the currently open container's
     /// decrypted filesystem, written out unencrypted so it can be examined by tools, people, or a
     /// real OS's own mount path entirely outside Asiri.
     /// </summary>

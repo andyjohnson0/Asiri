@@ -9,4 +9,6 @@
   <Project Path="Asiri.Core.Tests/Asiri.Core.Tests.csproj" />
   <Project Path="Asiri.Core/Asiri.Core.csproj" />
   <Project Path="Asiri.Diagnostics/Asiri.Diagnostics.csproj" />
+  <Project Path="Asiri.Export/Asiri.Export.csproj" />
+  <Project Path="Asiri.Export.Tests/Asiri.Export.Tests.csproj" />
 </Solution>

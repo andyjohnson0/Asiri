@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Asiri.Abstractions\Asiri.Abstractions.csproj" />
     <ProjectReference Include="..\Asiri.Core\Asiri.Core.csproj" />
+    <ProjectReference Include="..\Asiri.Export\Asiri.Export.csproj" />
   </ItemGroup>
 
   <ItemGroup>

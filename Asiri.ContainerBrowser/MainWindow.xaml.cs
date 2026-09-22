@@ -12,6 +12,7 @@ using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using uk.andyjohnson.Asiri.Abstractions;
 using uk.andyjohnson.Asiri.Core;
+using uk.andyjohnson.Asiri.Export;
 
 namespace uk.andyjohnson.Asiri.ContainerBrowser
 {
@@ -192,7 +193,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 
         /// <summary>
         /// Exports the currently open container's decrypted filesystem to a plain file via
-        /// <see cref="VeraCryptContainer.ExportFileSystemAsync"/>, so it can be examined by a filesystem-
+        /// <see cref="FileSystemExtractor.ExportAsync"/>, so it can be examined by a filesystem-
         /// checking tool, another person, a real OS's own mount path, or another AI session entirely
         /// outside Asiri: a way to ask "is this actually a valid filesystem?" using something other
         /// than Asiri's own read path, which - reading back exactly what it itself wrote - can't
@@ -218,7 +219,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
                 // reading" against a write-only handle - confirmed the hard way.
                 using (var destination = dialog.OutputPath!.Open(FileMode.Create, FileAccess.ReadWrite, FileShare.None))
                 {
-                    await _container!.ExportFileSystemAsync(destination, dialog.Format, cancellationTokenSource.Token);
+                    await new FileSystemExtractor(_container!).ExportAsync(destination, dialog.Format, cancellationTokenSource.Token);
                 }
 
                 MessageBox.Show(this, $"The filesystem image has been written to {dialog.OutputPath!.FullName}.", "Export Filesystem Image", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -226,15 +227,41 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             catch (OperationCanceledException)
             {
                 StatusText.Text = "Export cancelled.";
+                TryDeletePartialExport(dialog.OutputPath!);
             }
             catch (Exception ex)
             {
                 MessageBox.Show(this, ex.Message, "Unable to export filesystem image", MessageBoxButton.OK, MessageBoxImage.Error);
+                TryDeletePartialExport(dialog.OutputPath!);
             }
             finally
             {
                 IsEnabled = true;
                 progressDialog.Close();
+            }
+        }
+
+        /// <summary>
+        /// Deletes a filesystem-image export left behind by a cancelled or failed export - it's
+        /// incomplete (FileMode.Create already truncated whatever, if anything, was at this path
+        /// before the export started), not a valid image of any kind, and leaving it around risks
+        /// someone later mistaking a truncated file for a real one. Best-effort: a failure to delete
+        /// (e.g. the file is locked by another process) is swallowed rather than replacing the
+        /// cancellation/error message the user already saw.
+        /// </summary>
+        private static void TryDeletePartialExport(FileInfo outputPath)
+        {
+            try
+            {
+                outputPath.Refresh();
+                if (outputPath.Exists)
+                {
+                    outputPath.Delete();
+                }
+            }
+            catch
+            {
+                // Best-effort cleanup only - see remarks above.
             }
         }
 

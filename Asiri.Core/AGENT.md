@@ -43,15 +43,13 @@ This document takes precedence over all other instructions for the Asiri.Core pr
   ever writes its own metadata, never the free clusters it marks unused, so without this fill those
   clusters would remain the raw, unencrypted zero bytes a newly-extended file starts as, rather than
   looking like every other part of a genuine VeraCrypt volume.
-- Implement `VeraCryptContainer.ExportFileSystemAsync`: a diagnostic escape hatch that exports a
-  container's decrypted filesystem, unencrypted and uninterpreted by DiscUtils or
-  Asiri, to a caller-supplied stream in one of four `FileSystemExportFormat`s - the whole filesystem as
-  a bare image, just its first 512 bytes, or wrapped in a VHD (with or without a single MBR partition
-  around it - both exist side by side specifically to separate "is the filesystem's own content
-  wrong" from "does a partitioned-vs-unpartitioned layout matter" while diagnosing a real-OS
-  recognition problem) that Windows can mount natively - for handing the plaintext to a filesystem-
-  checking tool, another person, a real OS's own mount path, or another AI session, entirely outside
-  Asiri, since Asiri's own read path can't independently judge bytes it wrote itself.
+- Implement `IFileSystemExportSource`, and have `VeraCryptContainer` implement it explicitly
+  (`Length`, `FileSystemType`, `CopyBytesAsync`) - the minimal, dependency-free surface that
+  `Asiri.Export`'s `FileSystemExtractor` builds real disk-container exports on top of. Do not
+  implement any export-format-specific logic (raw image, VHD, etc.) here: that all lives in
+  `Asiri.Export` specifically so it isn't a dependency every `VeraCryptContainer` consumer has to
+  take - see `Asiri.Export/AGENT.md`. The one exception is the diagnostic boot-sector-only export,
+  which lives in `Asiri.Diagnostics` and reads through this same interface directly.
 - Do not implement support for encrypted partitions or drives.
 - Do not implement hidden volumes.
 - Implement AES, Serpent, Twofish, and Camellia.
@@ -132,9 +130,9 @@ This document takes precedence over all other instructions for the Asiri.Core pr
 - All exceptions must include descriptive messages.
 
 ## Dependencies
-- Use only BouncyCastle and DiscUtils (the LTRData.DiscUtils.* packages: Core, Fat, Ntfs, ExFat, Vhd -
-  the last used only for `ExportFileSystemAsync`'s VHD export format, not for anything container-format
-  related).
+- Use only BouncyCastle and DiscUtils (the LTRData.DiscUtils.* packages: Core, Fat, Ntfs, ExFat -
+  no DiscUtils virtual-disk container package such as Vhd: those are `Asiri.Export`'s dependency,
+  not this project's, precisely so a consumer who never exports doesn't take them on transitively).
 - Do not add any other dependencies without explicit permission.
 
 ## Prohibitions

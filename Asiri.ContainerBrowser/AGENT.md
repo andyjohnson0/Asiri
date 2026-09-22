@@ -50,10 +50,11 @@ This document takes precedence over all other instructions for the Asiri.Contain
   While creation is in progress, show `ProgressDialog`, the same as Open. On success, load the new
   (empty) container into the window exactly as Open would.
 - Provide a way to export the currently open container's decrypted filesystem to a plain file via
-  `VeraCryptContainer.ExportFileSystemAsync`, using `DumpImageDialog` for the output path (via a
-  Browse... button, matching `NewContainerDialog`'s own pattern) and a picker for the
-  `FileSystemExportFormat` to export as (whole filesystem, boot sector only, an unpartitioned VHD, or a
-  VHD with a single MBR partition). Enabled only while a container is open, alongside Close. Show
+  `Asiri.Export`'s `FileSystemExtractor.ExportAsync`, using `DumpImageDialog` for the output path
+  (via a Browse... button, matching `NewContainerDialog`'s own pattern) and a picker for the
+  `FileSystemExportFormat` to export as (a raw image, an unpartitioned VHD, or a VHD with a single
+  MBR partition - boot-sector-only export is diagnostic-only and lives in `Asiri.Diagnostics`
+  instead, not offered here). Enabled only while a container is open, alongside Close. Show
   `ProgressDialog` while the export is in progress, the same as every other potentially slow
   operation.
 - Provide a way to change the currently open container's password, keyfiles, PIM, and/or hash
