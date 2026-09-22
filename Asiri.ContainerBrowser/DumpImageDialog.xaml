@@ -14,7 +14,9 @@
         </StackPanel>
 
         <TextBlock Text="Format:" Margin="0,16,0,6"/>
-        <ComboBox x:Name="FormatComboBox" HorizontalAlignment="Left" Width="200"/>
+        <ComboBox x:Name="FormatComboBox" HorizontalAlignment="Left" Width="200" SelectionChanged="FormatComboBox_SelectionChanged"/>
+
+        <CheckBox x:Name="PartitionTableCheckBox" Content="Include a single MBR partition" Margin="0,12,0,0"/>
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
             <Button Content="OK" IsDefault="True" Width="75" Margin="0,0,8,0" Click="OkButton_Click"/>

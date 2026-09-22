@@ -9,13 +9,20 @@ This document takes precedence over all other instructions for the Asiri.Export 
   Asiri.
 - `FileSystemExtractor` is the sole public entry point, built against `Asiri.Core`'s
   `IFileSystemExportSource` interface, not `VeraCryptContainer` directly. This project exists
-  specifically to keep DiscUtils' virtual-disk container packages (Vhd, and eventually others - see
-  issue #13) out of `Asiri.Core`'s own dependency footprint, since not every `Asiri.Core` consumer
-  wants them (constrained clients, e.g. mobile).
-- `FileSystemExportFormat` covers real, usable disk formats only: a bare raw image, and VHD (with or
-  without a partition table). Do not add diagnostic-only formats here (e.g. boot-sector-only export)
-  - those live in `Asiri.Diagnostics`, reading through the same `IFileSystemExportSource` interface
-  directly.
+  specifically to keep DiscUtils' virtual-disk container packages out of `Asiri.Core`'s own
+  dependency footprint, since not every `Asiri.Core` consumer wants them (constrained clients, e.g.
+  mobile).
+- `FileSystemExportFormat` (which container format, if any) and `PartitionTableOption` (whether a
+  single MBR partition wraps the result) are orthogonal choices on `ExportAsync`, not a combined
+  enum - adding a new container format must never double `PartitionTableOption`'s own size, and vice
+  versa. `RawImage` does not support a partition table (there's no container format to wrap one
+  around); `ExportAsync` rejects that combination with `ArgumentException`.
+- Supported container formats: a bare raw image (`RawImage`, needs no DiscUtils virtual-disk
+  package), VHD, VHDX, and VDI - each via that format's own `Disk.InitializeFixed(Stream, Ownership,
+  long)` factory (all Stream-based, unlike VMDK - see issue #16 for why VMDK doesn't fit this
+  project's `Stream`-based `ExportAsync` contract and was split out rather than shoehorned in). Do
+  not add diagnostic-only formats here (e.g. boot-sector-only export) - those live in
+  `Asiri.Diagnostics`, reading through the same `IFileSystemExportSource` interface directly.
 - Do not implement tests in this project unless asked; if asked, mirror `Asiri.Core.Tests`'
   conventions (real VeraCrypt test containers, not synthetic ones, for this project's own export
   format tests).

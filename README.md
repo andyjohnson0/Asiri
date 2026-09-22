@@ -312,7 +312,8 @@ var container = await VeraCryptContainer.OpenAsync(
 try
 {
     using var destination = File.Create(@"C:\path\to\export.vhd");
-    await new FileSystemExtractor(container).ExportAsync(destination, FileSystemExportFormat.Vhd);
+    await new FileSystemExtractor(container).ExportAsync(
+        destination, FileSystemExportFormat.Vhd, PartitionTableOption.SingleMbrPartition);
 }
 finally
 {
@@ -320,9 +321,13 @@ finally
 }
 ```
 
-`FileSystemExportFormat` covers a bare raw image (a real, usable disk image in its own right — what
-a tool like `dd`, or flashing to a USB drive, expects), and VHD, with or without a single MBR
-partition around it — Windows can mount a VHD natively, with no VeraCrypt or Asiri involved at all.
+`FileSystemExportFormat` — the container format — and `PartitionTableOption` — whether a single MBR
+partition wraps the result — are independent choices, so adding a new container format never doubles
+the other. `FileSystemExportFormat` covers a bare raw image (a real, usable disk image in its own
+right — what a tool like `dd`, or flashing to a USB drive, expects), VHD, VHDX, and VDI — Windows can
+mount a VHD/VHDX natively, and VirtualBox a VDI, with no VeraCrypt or Asiri involved at all.
+`PartitionTableOption.SingleMbrPartition` isn't supported alongside `RawImage` — there's no container
+format there to wrap a partition table around.
 
 ## Repository structure
 
@@ -331,7 +336,7 @@ partition around it — Windows can mount a VHD natively, with no VeraCrypt or A
 | [`Asiri.Abstractions`](Asiri.Abstractions) | Dependency-free filesystem contracts (`IDirectory`, `IFile`, `IFileSystemEntry`). Depends on nothing, so other software can target these interfaces without pulling in BouncyCastle or DiscUtils. |
 | [`Asiri.Core`](Asiri.Core) | The library itself: VeraCrypt header parsing (`HeaderParser`), sector-level encryption and decryption (`SectorDecryptor`, `DecryptedBlockDeviceStream`), the cipher and hash implementations (under `Crypto/`), the DiscUtils-backed filesystem adapters (under `Filesystem/`), and the public entry point, `VeraCryptContainer`. |
 | [`Asiri.Core.Tests`](Asiri.Core.Tests) | xUnit tests, run against real VeraCrypt container files checked into `Asiri.Core.Tests/Test Data` — covering every supported cipher/cascade, hash, filesystem, PIM, and keyfile combination — as well as synthetic, from-scratch header tests independent of the library's own crypto code, read-write tests covering create/delete/rename/move/attributes/timestamps across all three filesystems, and password/keyfile-change tests. |
-| [`Asiri.Export`](Asiri.Export) | Exports a container's decrypted filesystem to a real disk image (a bare raw image, or a VHD, with or without a partition table). Kept separate from `Asiri.Core` so its DiscUtils virtual-disk dependency isn't forced on every `Asiri.Core` consumer. |
+| [`Asiri.Export`](Asiri.Export) | Exports a container's decrypted filesystem to a real disk image (a bare raw image, or VHD/VHDX/VDI, with or without a partition table). Kept separate from `Asiri.Core` so its DiscUtils virtual-disk dependencies aren't forced on every `Asiri.Core` consumer. |
 | [`Asiri.Export.Tests`](Asiri.Export.Tests) | xUnit tests for `Asiri.Export`, run against the same real VeraCrypt containers as `Asiri.Core.Tests`. |
 | [`Asiri.ContainerBrowser`](Asiri.ContainerBrowser) | A small WPF reference application: open a container read-only or with write access, browse and edit its folder tree (create/rename/move/delete, drag-and-drop import/export), change its password, keyfiles, PIM, or hash algorithm, export its filesystem to a disk image, and view text files, images, or a hex dump of anything else. Demonstrates `Asiri.Core` as a consumer would use it. |
 | [`Asiri.Diagnostics`](Asiri.Diagnostics) | A standalone command-line tool, not part of the library or its public API: compares what `Asiri.Core` decrypts from a container's data area against what a real, already-mounted VeraCrypt exposes for the same container, to isolate whether a filesystem-recognition failure is a decryption mismatch or something downstream of decryption; also a cheap boot-sector-only export. |

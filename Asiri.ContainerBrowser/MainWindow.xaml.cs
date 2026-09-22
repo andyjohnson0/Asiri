@@ -219,7 +219,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
                 // reading" against a write-only handle - confirmed the hard way.
                 using (var destination = dialog.OutputPath!.Open(FileMode.Create, FileAccess.ReadWrite, FileShare.None))
                 {
-                    await new FileSystemExtractor(_container!).ExportAsync(destination, dialog.Format, cancellationTokenSource.Token);
+                    await new FileSystemExtractor(_container!).ExportAsync(destination, dialog.Format, dialog.PartitionTable, cancellationTokenSource.Token);
                 }
 
                 MessageBox.Show(this, $"The filesystem image has been written to {dialog.OutputPath!.FullName}.", "Export Filesystem Image", MessageBoxButton.OK, MessageBoxImage.Information);

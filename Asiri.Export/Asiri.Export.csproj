@@ -14,6 +14,8 @@
 
   <ItemGroup>
     <PackageReference Include="LTRData.DiscUtils.Vhd" Version="1.0.88" />
+    <PackageReference Include="LTRData.DiscUtils.Vhdx" Version="1.0.88" />
+    <PackageReference Include="LTRData.DiscUtils.Vdi" Version="1.0.88" />
   </ItemGroup>
 
   <ItemGroup>

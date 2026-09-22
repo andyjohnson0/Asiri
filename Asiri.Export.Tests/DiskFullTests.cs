@@ -37,8 +37,14 @@ namespace uk.andyjohnson.Asiri.Export.Tests
             }
         }
 
-        [Fact]
-        public async Task ExportAsync_Vhd_DestinationRunsOutOfSpace_ThrowsAndReportsWhatHappened()
+        [Theory]
+        [InlineData(FileSystemExportFormat.Vhd, PartitionTableOption.None)]
+        [InlineData(FileSystemExportFormat.Vhd, PartitionTableOption.SingleMbrPartition)]
+        [InlineData(FileSystemExportFormat.Vhdx, PartitionTableOption.None)]
+        [InlineData(FileSystemExportFormat.Vhdx, PartitionTableOption.SingleMbrPartition)]
+        [InlineData(FileSystemExportFormat.Vdi, PartitionTableOption.None)]
+        [InlineData(FileSystemExportFormat.Vdi, PartitionTableOption.SingleMbrPartition)]
+        public async Task ExportAsync_DestinationRunsOutOfSpace_ThrowsAndReportsWhatHappened(FileSystemExportFormat format, PartitionTableOption partitionTable)
         {
             var fixture = TestContainers.AesNtfs;
             var container = await fixture.OpenAsync();
@@ -47,31 +53,10 @@ namespace uk.andyjohnson.Asiri.Export.Tests
                 var tooSmall = new DiskFullSimulatingStream(writeLimit: 4096);
 
                 var ex = await Record.ExceptionAsync(() =>
-                    new FileSystemExtractor(container).ExportAsync(tooSmall, FileSystemExportFormat.Vhd));
+                    new FileSystemExtractor(container).ExportAsync(tooSmall, format, partitionTable));
 
                 Assert.NotNull(ex);
-                Console.WriteLine($"Vhd: {ex!.GetType().FullName}: {ex.Message}");
-            }
-            finally
-            {
-                container.Close();
-            }
-        }
-
-        [Fact]
-        public async Task ExportAsync_VhdWithPartitionTable_DestinationRunsOutOfSpace_ThrowsAndReportsWhatHappened()
-        {
-            var fixture = TestContainers.AesNtfs;
-            var container = await fixture.OpenAsync();
-            try
-            {
-                var tooSmall = new DiskFullSimulatingStream(writeLimit: 4096);
-
-                var ex = await Record.ExceptionAsync(() =>
-                    new FileSystemExtractor(container).ExportAsync(tooSmall, FileSystemExportFormat.VhdWithPartitionTable));
-
-                Assert.NotNull(ex);
-                Console.WriteLine($"VhdWithPartitionTable: {ex!.GetType().FullName}: {ex.Message}");
+                Console.WriteLine($"{format}/{partitionTable}: {ex!.GetType().FullName}: {ex.Message}");
             }
             finally
             {
