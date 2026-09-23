@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>uk.andyjohnson.Asiri.Diagnostics</RootNamespace>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <Authors>Andrew Johnson</Authors>
     <Description>
       Standalone diagnostic tool: not part of the Asiri library or its public API. Compares what

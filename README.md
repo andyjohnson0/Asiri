@@ -56,7 +56,7 @@ has not been separately verified this way — the caution above still applies to
 
 ## Status
 
-Pre-release, version `0.3.0`. The public API may still change.
+Pre-release, version `0.4.0`. The public API may still change.
 
 ## What's supported
 

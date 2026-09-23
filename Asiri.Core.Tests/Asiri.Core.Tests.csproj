@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <RootNamespace>uk.andyjohnson.Asiri.Core.Tests</RootNamespace>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <Authors>Andrew Johnson</Authors>
     <Description>Tests for Asiri.Core.</Description>
     <RepositoryUrl>https://github.com/andyjohnson0/Asiri</RepositoryUrl>
