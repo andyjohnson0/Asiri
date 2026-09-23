@@ -16,6 +16,12 @@ This document takes precedence over all other instructions for the Asiri.Diagnos
   hands the rest of the arguments to that command's own class. Each command lives in its own class
   (see `CompareCommand`) and owns its own argument parsing, usage text, and logic - add a new
   diagnostic as a new command class, not by growing `Program.Main` or an existing command.
+- `dump-boot-sector` (`DumpBootSectorCommand`): opens a container via the ordinary
+  `VeraCryptContainer.OpenAsync` API and writes just its boot sector (the first 512 bytes of the
+  decrypted filesystem) to a file, via `IFileSystemExportSource.CopyBytesAsync` directly - the same
+  minimal interface `Asiri.Export`'s `FileSystemExtractor` is built on. Lives here rather than in
+  `Asiri.Export` because a bare boot sector isn't a usable disk image on its own the way
+  `Asiri.Export`'s formats are - it's diagnostic-only, and reading it needs no DiscUtils dependency.
 - `compare` (`CompareCommand`): decrypts a container's data area directly via `HeaderParser`/
   `SectorDecryptor` - never through `VeraCryptContainer` or DiscUtils, so no filesystem
   interpretation happens on Asiri's side - and compares it byte-for-byte against the same range read

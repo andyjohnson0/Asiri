@@ -12,8 +12,6 @@ using DiscUtils.ExFat.Internal;
 using DiscUtils.ExFat.Internal.Filesystem;
 using DiscUtils.Fat;
 using DiscUtils.Ntfs;
-using DiscUtils.Partitions;
-using DiscUtils.Vhd;
 using uk.andyjohnson.Asiri.Abstractions;
 using uk.andyjohnson.Asiri.Core.Crypto;
 using uk.andyjohnson.Asiri.Core.Filesystem.ExFat;
@@ -164,6 +162,20 @@ namespace uk.andyjohnson.Asiri.Core
         /// intend to write during this session, not defensively "just in case".
         /// </summary>
         public ContainerAccessMode AccessMode { get; set; } = ContainerAccessMode.ReadOnly;
+
+        /// <summary>
+        /// Which header region to use, or <see cref="HeaderType.Auto"/> - the default - to try the
+        /// primary header first and fall back to the backup header if it fails validation.
+        /// Requesting <see cref="HeaderType.Primary"/> or <see cref="HeaderType.Backup"/> explicitly
+        /// tries only that region, with no fallback to the other if it fails - verified against
+        /// VeraCrypt's own source: its mount-time "use backup header" option is a single, non-fallback
+        /// choice too (<c>Core/MountOptions.h</c>'s <c>UseBackupHeaders</c>); the "VeraCrypt silently
+        /// recovers from a damaged primary header" behaviour most users associate with it is a GUI-level
+        /// retry heuristic on top of that (<c>Main/GraphicUserInterface.cpp</c>, gated behind repeated
+        /// incorrect-password attempts), not a core library behaviour - so an explicit choice here
+        /// should behave like VeraCrypt's own explicit choice does, not like its automatic retry.
+        /// </summary>
+        public HeaderType HeaderPreference { get; set; } = HeaderType.Auto;
     }
 
     /// <summary>
@@ -213,6 +225,43 @@ namespace uk.andyjohnson.Asiri.Core
     }
 
     /// <summary>
+    /// The result of <see cref="VeraCryptContainer.OpenAsync"/> or
+    /// <see cref="VeraCryptContainer.CreateAsync"/>: the container itself, plus facts about how that
+    /// particular call resolved - today, just which header region was used. Kept separate from
+    /// <see cref="VeraCryptContainer"/> itself deliberately: <see cref="HeaderType"/> is a one-time
+    /// fact about the open/create call, not ongoing container state - nothing the container does
+    /// later (unlike, say, <see cref="VeraCryptContainer.Algorithm"/> or
+    /// <see cref="VeraCryptContainer.AccessMode"/>) ever consults it again, so it doesn't belong on
+    /// the container's own long-lived public surface.
+    /// </summary>
+    /// <remarks>
+    /// Both methods are all-or-nothing: on failure, each throws rather than returning at all - never
+    /// null, and never an <see cref="OpenResult"/> with a null <see cref="Container"/>. There is no
+    /// partial-success state to represent, so <see cref="Container"/> is never null on any
+    /// <see cref="OpenResult"/> a caller actually receives.
+    /// </remarks>
+    public sealed class OpenResult
+    {
+        internal OpenResult(VeraCryptContainer container, HeaderType headerType)
+        {
+            Container = container;
+            HeaderType = headerType;
+        }
+
+        /// <summary>The opened or newly created container.</summary>
+        public VeraCryptContainer Container { get; }
+
+        /// <summary>
+        /// Which header region was actually used - never <see cref="HeaderType.Auto"/>, even if
+        /// that's what <see cref="OpenOptions.HeaderPreference"/> requested: by the time a container
+        /// is open, that choice has always already been resolved to one concrete region or the other.
+        /// Always <see cref="HeaderType.Primary"/> for <see cref="VeraCryptContainer.CreateAsync"/>'s
+        /// result - a freshly created container has no fallback history to report.
+        /// </summary>
+        public HeaderType HeaderType { get; }
+    }
+
+    /// <summary>
     /// Everything about a credentials change besides the new password (see
     /// <see cref="VeraCryptContainer.ChangeCredentialsAsync"/>), each defaulting to the same
     /// behaviour as if it had been omitted entirely.
@@ -241,48 +290,6 @@ namespace uk.andyjohnson.Asiri.Core
     }
 
     /// <summary>
-    /// The output format for <see cref="VeraCryptContainer.ExportFileSystemAsync"/> - a diagnostic export
-    /// of a container's decrypted filesystem, for handing to a tool, person, or AI session entirely
-    /// outside Asiri (see that method's own remarks for why).
-    /// </summary>
-    public enum FileSystemExportFormat
-    {
-        /// <summary>
-        /// The whole decrypted filesystem, written as a bare sequence of bytes with no wrapper of any
-        /// kind - exactly what DiscUtils formatted and reads from, nothing added or removed.
-        /// </summary>
-        RawImage,
-
-        /// <summary>
-        /// Only the first 512 bytes (the volume's boot sector) of the decrypted filesystem, as a bare
-        /// sequence of bytes - a cheap way to eyeball just that, for the same reason
-        /// <see cref="VeraCryptContainer.DetectFileSystemTypeAsync"/> only ever looks there itself.
-        /// </summary>
-        RawImageBootSectorOnly,
-
-        /// <summary>
-        /// The whole decrypted filesystem, wrapped in a fixed-size VHD with no partition table - a
-        /// single, unpartitioned "superfloppy"-style virtual disk whose own first sector is the
-        /// filesystem's boot sector, matching exactly how the filesystem is laid out inside the real
-        /// encrypted container. Windows can mount a VHD natively (no VeraCrypt, no Asiri involved at
-        /// all), which is the point: it lets the exported filesystem be tested for real-OS validity
-        /// completely independently of everything else in Asiri's own pipeline.
-        /// </summary>
-        Vhd,
-
-        /// <summary>
-        /// The same idea as <see cref="Vhd"/>, but with a single MBR partition (of the appropriate
-        /// type for the container's own <see cref="VeraCryptContainer.FileSystemType"/>) wrapped
-        /// around the filesystem, rather than placing it directly at the start of the disk. Exists
-        /// alongside <see cref="Vhd"/> specifically to separate two variables while diagnosing why a
-        /// real OS doesn't recognise a container's filesystem: whether the filesystem's own content is
-        /// at fault, or whether a partitioned-vs-unpartitioned disk layout is.
-        /// </summary>
-        VhdWithPartitionTable
-    }
-
-
-    /// <summary>
     /// Provides access to the contents of a VeraCrypt encrypted file container, read-only by default.
     /// </summary>
     /// <remarks>
@@ -291,7 +298,7 @@ namespace uk.andyjohnson.Asiri.Core
     /// <see cref="ContainerAccessMode.ReadWrite"/> - modifies the container file in place, with no
     /// undo. Only enable writing on a container you have a backup of.
     /// </remarks>
-    public sealed class VeraCryptContainer
+    public sealed class VeraCryptContainer : IFileSystemExportSource
     {
         private readonly DecryptedBlockDeviceStream _stream;
         private readonly DiscFileSystem _fileSystem;
@@ -345,8 +352,30 @@ namespace uk.andyjohnson.Asiri.Core
         /// every default - see <see cref="OpenOptions"/>.
         /// </param>
         /// <param name="cancellationToken">A token to cancel the operation.</param>
-        /// <returns>A container whose <see cref="Root"/> exposes the decrypted filesystem.</returns>
-        public static async Task<VeraCryptContainer> OpenAsync(
+        /// <returns>
+        /// The opened container (whose <see cref="Root"/> exposes the decrypted filesystem) and
+        /// which header region it was actually opened from - see <see cref="OpenResult"/>. This
+        /// method is all-or-nothing: it either returns a fully-usable result or throws - never null,
+        /// and never a result with a null <see cref="OpenResult.Container"/>.
+        /// </returns>
+        /// <exception cref="ArgumentNullException">
+        /// <paramref name="path"/> or <paramref name="password"/> is null.
+        /// </exception>
+        /// <exception cref="ArgumentException">
+        /// <paramref name="options"/>' <see cref="OpenOptions.Pim"/> is negative, its
+        /// <see cref="OpenOptions.Algorithm"/> or <see cref="OpenOptions.HashAlgorithm"/> is
+        /// unsupported, or <paramref name="path"/> does not refer to an existing file.
+        /// </exception>
+        /// <exception cref="InvalidOperationException">
+        /// The container file could not be opened for reading; no (algorithm, hash, header-region)
+        /// combination decrypts a valid header (wrong password, not a VeraCrypt volume, or - with
+        /// <see cref="OpenOptions.HeaderPreference"/> forced to <see cref="HeaderType.Primary"/>
+        /// or <see cref="HeaderType.Backup"/> - that one region specifically doesn't validate);
+        /// the requested backup header doesn't exist because the file is too small to contain one; the
+        /// decrypted volume has no recognizable boot sector; or the detected filesystem fails to open
+        /// (corrupt or unsupported content within an otherwise successfully-decrypted container).
+        /// </exception>
+        public static async Task<OpenResult> OpenAsync(
             FileInfo path,
             string password,
             OpenOptions options = null,
@@ -375,7 +404,7 @@ namespace uk.andyjohnson.Asiri.Core
                 throw new ArgumentException($"Unsupported hash algorithm: {options.HashAlgorithm.Value}.", nameof(options));
             }
 
-            var header = await DetectHeaderAsync(path, password, options.Pim, options.KeyFiles, options.Algorithm, options.HashAlgorithm, cancellationToken).ConfigureAwait(false);
+            var header = await DetectHeaderAsync(path, password, options.Pim, options.KeyFiles, options.Algorithm, options.HashAlgorithm, options.HeaderPreference, cancellationToken).ConfigureAwait(false);
             if (header == null)
             {
                 throw new InvalidOperationException(
@@ -392,7 +421,8 @@ namespace uk.andyjohnson.Asiri.Core
                 var fsType = await DetectFileSystemTypeAsync(decryptor, cancellationToken).ConfigureAwait(false);
                 var lifetime = new ContainerLifetime(options.AccessMode);
                 var (fileSystem, root) = await OpenFileSystemAsync(fsType, stream, lifetime, cancellationToken).ConfigureAwait(false);
-                return new VeraCryptContainer(stream, fileSystem, lifetime, root, header, fsType);
+                var container = new VeraCryptContainer(stream, fileSystem, lifetime, root, header, fsType);
+                return new OpenResult(container, header.FromBackup ? HeaderType.Backup : HeaderType.Primary);
             }
             catch
             {
@@ -455,8 +485,32 @@ namespace uk.andyjohnson.Asiri.Core
         /// not checked again during formatting, since a cancelled format would leave a corrupt file
         /// that this method would then need to clean up anyway - see the remarks above.
         /// </param>
-        /// <returns>A container whose <see cref="Root"/> exposes the newly formatted, empty filesystem.</returns>
-        public static Task<VeraCryptContainer> CreateAsync(
+        /// <returns>
+        /// The newly created container (whose <see cref="Root"/> exposes the formatted, empty
+        /// filesystem) - see <see cref="OpenResult"/>. Its <see cref="OpenResult.HeaderType"/> is
+        /// always <see cref="HeaderType.Primary"/>. This method is all-or-nothing: it either returns
+        /// a fully-usable result or throws - never null, and never a result with a null
+        /// <see cref="OpenResult.Container"/>.
+        /// </returns>
+        /// <exception cref="ArgumentNullException">
+        /// <paramref name="path"/> or <paramref name="password"/> is null.
+        /// </exception>
+        /// <exception cref="ArgumentException">
+        /// <paramref name="algorithm"/> or <paramref name="hashAlgorithm"/> is unsupported;
+        /// <paramref name="fileSystemType"/> is not <see cref="FileSystemType.Ntfs"/>,
+        /// <see cref="FileSystemType.Fat"/>, or <see cref="FileSystemType.ExFat"/>;
+        /// <paramref name="options"/>' <see cref="CreateOptions.Pim"/> is negative;
+        /// <paramref name="size"/> is too small to hold VeraCrypt's own header overhead;
+        /// <paramref name="path"/> already exists and <see cref="CreateOptions.Overwrite"/> wasn't
+        /// set; or <see cref="CreateOptions.ClusterSize"/> was given for a filesystem that doesn't
+        /// support overriding it, or isn't a positive power of two.
+        /// </exception>
+        /// <exception cref="InvalidOperationException">
+        /// Header construction, container-file creation, the random data-area fill, or filesystem
+        /// formatting failed - in every case, any container file already created on disk is deleted
+        /// before this propagates, rather than left behind as a corrupt, half-formed file.
+        /// </exception>
+        public static Task<OpenResult> CreateAsync(
             FileInfo path,
             long size,
             string password,
@@ -528,7 +582,7 @@ namespace uk.andyjohnson.Asiri.Core
             return CreateAsyncCore(path, size, password, algorithm, hashAlgorithm, fileSystemType, options, cancellationToken);
         }
 
-        private static async Task<VeraCryptContainer> CreateAsyncCore(
+        private static async Task<OpenResult> CreateAsyncCore(
             FileInfo path, long size, string password, CryptoAlgorithm algorithm, HashAlgorithm hashAlgorithm,
             FileSystemType fileSystemType, CreateOptions options, CancellationToken cancellationToken)
         {
@@ -599,7 +653,8 @@ namespace uk.andyjohnson.Asiri.Core
                     // otherwise still only be sitting in.
                     await Task.Run(() => stream.FlushToDisk(), cancellationToken).ConfigureAwait(false);
 
-                    return new VeraCryptContainer(stream, fileSystem, lifetime, root, header, fileSystemType);
+                    var container = new VeraCryptContainer(stream, fileSystem, lifetime, root, header, fileSystemType);
+                    return new OpenResult(container, HeaderType.Primary);
                 }
                 catch
                 {
@@ -947,8 +1002,23 @@ namespace uk.andyjohnson.Asiri.Core
         /// disk; not checked again between the primary and backup writes, to keep that already-inherent
         /// window as short as possible rather than artificially widening it.
         /// </param>
+        /// <exception cref="ArgumentNullException"><paramref name="newPassword"/> is null.</exception>
+        /// <exception cref="ObjectDisposedException">This container has already been closed.</exception>
+        /// <exception cref="ArgumentException">
+        /// <paramref name="options"/>' <see cref="ChangeCredentialsOptions.NewPim"/> is negative, or
+        /// its <see cref="ChangeCredentialsOptions.NewHashAlgorithm"/> is unsupported.
+        /// </exception>
         /// <exception cref="InvalidOperationException">
-        /// Thrown if this container is not open with <see cref="ContainerAccessMode.ReadWrite"/>.
+        /// This container is not open with <see cref="ContainerAccessMode.ReadWrite"/> (see
+        /// <see cref="AccessMode"/>); a newly built header region unexpectedly failed to self-verify
+        /// before anything was written to disk (an internal error, not a usage error); writing the
+        /// primary header failed, in which case nothing has changed - the backup header was never
+        /// touched, and the container is still fully openable with the <i>old</i> credentials; or the
+        /// primary header was rewritten successfully but writing the backup header then failed, in
+        /// which case the container is left fully openable with the <i>new</i> credentials (the backup
+        /// header only matters as a fallback if the primary is later damaged). Either write-failure
+        /// case wraps the underlying cause (most likely <see cref="System.IO.IOException"/>) as
+        /// <see cref="Exception.InnerException"/>.
         /// </exception>
         public async Task ChangeCredentialsAsync(
             string newPassword,
@@ -990,8 +1060,18 @@ namespace uk.andyjohnson.Asiri.Core
             // on honouring cancellation only up to this point. FlushToDisk after each - a physical
             // flush, not just a push into the OS's own shared cache - matching how VeraCrypt's own
             // driver can read this file with cache-bypassing, unbuffered I/O.
-            await Task.Run(() => _stream.WriteRawRegion(0, newPrimaryRegion), CancellationToken.None).ConfigureAwait(false);
-            await Task.Run(() => _stream.FlushToDisk(), CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await Task.Run(() => _stream.WriteRawRegion(0, newPrimaryRegion), CancellationToken.None).ConfigureAwait(false);
+                await Task.Run(() => _stream.FlushToDisk(), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "Writing the primary header with the new credentials failed. Nothing has changed: " +
+                    "the backup header was not touched, and the container is still fully openable with " +
+                    "the OLD credentials.", ex);
+            }
 
             var backupOffset = HeaderParser.DataAreaOffset + _stream.Length;
             try
@@ -1028,13 +1108,16 @@ namespace uk.andyjohnson.Asiri.Core
 
         /// <summary>
         /// Searches every (<see cref="CryptoAlgorithm"/>, <see cref="HashAlgorithm"/>) combination
-        /// against the container's primary header region, falling back to the backup region if none
-        /// match, reading each region from disk only once regardless of how many combinations are
-        /// tried.
+        /// against the container's header, reading each region from disk only once regardless of how
+        /// many combinations are tried. <paramref name="headerPreference"/>
+        /// <see cref="HeaderType.Auto"/> tries the primary region and falls back to the backup region
+        /// if none match; an explicit <see cref="HeaderType.Primary"/> or <see cref="HeaderType.Backup"/>
+        /// tries only that one region - see <see cref="OpenOptions.HeaderPreference"/>'s own remarks
+        /// for why.
         /// </summary>
         private static async Task<VeraCryptHeader> DetectHeaderAsync(
             FileInfo path, string password, int pim, IEnumerable<FileInfo> keyFiles,
-            CryptoAlgorithm? algo, HashAlgorithm? hashAlgo, CancellationToken cancellationToken)
+            CryptoAlgorithm? algo, HashAlgorithm? hashAlgo, HeaderType headerPreference, CancellationToken cancellationToken)
         {
             // Matches HeaderParser.ParseAsync's own explicit existence check - a missing file is a
             // bad argument, not a mid-operation failure, and OpenAsync now always reaches this method
@@ -1062,26 +1145,35 @@ namespace uk.andyjohnson.Asiri.Core
 
             using (stream)
             {
-                var primaryRegion = await HeaderParser.ReadRegionAsync(stream, 0, HeaderParser.HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                var header = await TryAllCombinationsAsync(primaryRegion, passwordBytes, fromBackup: false, pim, algo, hashAlgo, cancellationToken).ConfigureAwait(false);
-                if (header != null)
+                if (headerPreference != HeaderType.Backup)
                 {
-                    return header;
-                }
-
-                if (stream.Length >= HeaderParser.BackupHeaderOffsetFromEnd)
-                {
-                    var backupOffset = stream.Length - HeaderParser.BackupHeaderOffsetFromEnd;
-                    var backupRegion = await HeaderParser.ReadRegionAsync(stream, backupOffset, HeaderParser.HeaderRegionSize, cancellationToken).ConfigureAwait(false);
-                    header = await TryAllCombinationsAsync(backupRegion, passwordBytes, fromBackup: true, pim, algo, hashAlgo, cancellationToken).ConfigureAwait(false);
-                    if (header != null)
+                    var primaryRegion = await HeaderParser.ReadRegionAsync(stream, 0, HeaderParser.HeaderRegionSize, cancellationToken).ConfigureAwait(false);
+                    var header = await TryAllCombinationsAsync(primaryRegion, passwordBytes, fromBackup: false, pim, algo, hashAlgo, cancellationToken).ConfigureAwait(false);
+                    if (header != null || headerPreference == HeaderType.Primary)
                     {
+                        // A null here with HeaderType.Primary means: the primary header was
+                        // explicitly requested and didn't validate - no fallback to the backup
+                        // region, by design (see OpenOptions.HeaderPreference's own remarks).
+                        // OpenAsync's own null check turns that into its standard error message.
                         return header;
                     }
                 }
-            }
 
-            return null;
+                if (stream.Length < HeaderParser.BackupHeaderOffsetFromEnd)
+                {
+                    if (headerPreference == HeaderType.Backup)
+                    {
+                        throw new InvalidOperationException(
+                            $"Container file too small to contain a backup header (needs at least " +
+                            $"{HeaderParser.BackupHeaderOffsetFromEnd} bytes): {path.FullName}");
+                    }
+                    return null;
+                }
+
+                var backupOffset = stream.Length - HeaderParser.BackupHeaderOffsetFromEnd;
+                var backupRegion = await HeaderParser.ReadRegionAsync(stream, backupOffset, HeaderParser.HeaderRegionSize, cancellationToken).ConfigureAwait(false);
+                return await TryAllCombinationsAsync(backupRegion, passwordBytes, fromBackup: true, pim, algo, hashAlgo, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         /// <summary>
@@ -1300,125 +1392,33 @@ namespace uk.andyjohnson.Asiri.Core
         public ContainerAccessMode AccessMode => _lifetime.MaxAccessMode;
 
         /// <summary>
-        /// Exports the container's decrypted filesystem to <paramref name="destination"/>, in the
-        /// given <paramref name="format"/> - none of it encrypted, and none of it interpreted by
-        /// Asiri or DiscUtils on the way out. Added specifically to let that plaintext be handed to
-        /// tools, reviewers, or a real OS's own mount path entirely outside Asiri, to help pin down
-        /// why a container this library creates isn't recognised by a real OS - a question Asiri's
-        /// own read path, which agrees with itself by construction, can't answer on its own.
+        /// The total length, in bytes, of the decrypted filesystem - see
+        /// <see cref="IFileSystemExportSource"/>, implemented explicitly so it isn't part of this
+        /// class's own public surface: it exists for <c>Asiri.Export</c>'s <c>FileSystemExtractor</c>,
+        /// not for ordinary callers.
         /// </summary>
-        /// <param name="destination">
-        /// The stream to write the export to. Written to starting at its current position; never
-        /// sought or resized by this method.
-        /// </param>
-        /// <param name="format">The export format - see <see cref="FileSystemExportFormat"/>.</param>
-        /// <param name="cancellationToken">A token to cancel the operation.</param>
-        public Task ExportFileSystemAsync(Stream destination, FileSystemExportFormat format = FileSystemExportFormat.RawImage, CancellationToken cancellationToken = default)
+        long IFileSystemExportSource.Length => _stream.Length;
+
+        /// <summary>See <see cref="IFileSystemExportSource"/>'s own remarks on explicit implementation.</summary>
+        FileSystemType IFileSystemExportSource.FileSystemType => FileSystemType;
+
+        /// <summary>See <see cref="IFileSystemExportSource"/>'s own remarks on explicit implementation.</summary>
+        Task IFileSystemExportSource.CopyBytesAsync(Stream destination, long byteCount, CancellationToken cancellationToken)
         {
             if (destination == null)
             {
                 throw new ArgumentNullException(nameof(destination));
             }
-            switch (format)
-            {
-                case FileSystemExportFormat.RawImage:
-                case FileSystemExportFormat.RawImageBootSectorOnly:
-                case FileSystemExportFormat.Vhd:
-                case FileSystemExportFormat.VhdWithPartitionTable:
-                    break;
-                default:
-                    throw new ArgumentException($"Unsupported export format: {format}.", nameof(format));
-            }
             _lifetime.ThrowIfClosed();
 
-            return ExportFileSystemAsyncCore(destination, format, cancellationToken);
-        }
-
-        private Task ExportFileSystemAsyncCore(Stream destination, FileSystemExportFormat format, CancellationToken cancellationToken)
-        {
-            switch (format)
-            {
-                case FileSystemExportFormat.RawImage:
-                    return CopyRawBytesAsync(destination, _stream.Length, cancellationToken);
-                case FileSystemExportFormat.RawImageBootSectorOnly:
-                    return CopyRawBytesAsync(destination, DefaultSectorSize, cancellationToken);
-                case FileSystemExportFormat.Vhd:
-                    return WriteVhdAsync(destination, cancellationToken);
-                case FileSystemExportFormat.VhdWithPartitionTable:
-                    return WriteVhdWithPartitionTableAsync(destination, cancellationToken);
-                default:
-                    // Unreachable: format is already caller-validated by ExportFileSystemAsync.
-                    throw new ArgumentException($"Unsupported export format: {format}.", nameof(format));
-            }
-        }
-
-        /// <summary>
-        /// Wraps the container's decrypted filesystem in a fixed-size VHD with no partition table -
-        /// see <see cref="FileSystemExportFormat.Vhd"/>'s own remarks for why no partition table.
-        /// </summary>
-        private async Task WriteVhdAsync(Stream destination, CancellationToken cancellationToken)
-        {
-            var capacity = _stream.Length;
-            using (var disk = Disk.InitializeFixed(destination, DiscUtils.Streams.Ownership.None, capacity))
-            {
-                await CopyRawBytesAsync(disk.Content, capacity, cancellationToken).ConfigureAwait(false);
-            }
-        }
-
-        /// <summary>
-        /// The extra space reserved, beyond the filesystem's own size, when building a partitioned
-        /// VHD - enough to comfortably cover the MBR plus BiosPartitionTable's own alignment gap
-        /// before the partition's first sector (conventionally around 1 MiB), without needing to
-        /// compute the exact figure ourselves.
-        /// </summary>
-        private const long VhdPartitionOverhead = 4 * 1024 * 1024;
-
-        /// <summary>
-        /// Wraps the container's decrypted filesystem in a fixed-size VHD with a single MBR partition
-        /// around it - see <see cref="FileSystemExportFormat.VhdWithPartitionTable"/>'s own remarks.
-        /// </summary>
-        private async Task WriteVhdWithPartitionTableAsync(Stream destination, CancellationToken cancellationToken)
-        {
-            var filesystemSize = _stream.Length;
-            var capacity = filesystemSize + VhdPartitionOverhead;
-
-            using (var disk = Disk.InitializeFixed(destination, DiscUtils.Streams.Ownership.None, capacity))
-            {
-                BiosPartitionTable.Initialize(disk, GetPartitionType(FileSystemType));
-                using (var partitionStream = disk.Partitions[0].Open())
-                {
-                    await CopyRawBytesAsync(partitionStream, filesystemSize, cancellationToken).ConfigureAwait(false);
-                }
-            }
-        }
-
-        /// <summary>
-        /// The MBR partition type byte real Windows-formatted disks conventionally use for a given
-        /// filesystem. MBR has no dedicated exFAT type - real exFAT partitions typically use GPT's own
-        /// "Basic Data" type instead - so this maps exFAT to the same type NTFS uses (0x07), matching
-        /// how MBR-partitioned exFAT volumes are conventionally marked in practice.
-        /// </summary>
-        private static WellKnownPartitionType GetPartitionType(FileSystemType fileSystemType)
-        {
-            switch (fileSystemType)
-            {
-                case FileSystemType.Fat:
-                    return WellKnownPartitionType.WindowsFat;
-                case FileSystemType.Ntfs:
-                case FileSystemType.ExFat:
-                    return WellKnownPartitionType.WindowsNtfs;
-                default:
-                    // Unreachable: fileSystemType is always a value this container was itself opened
-                    // or created with, already validated at that point.
-                    throw new ArgumentException($"Unsupported filesystem type: {fileSystemType}.", nameof(fileSystemType));
-            }
+            return CopyBytesAsync(destination, byteCount, cancellationToken);
         }
 
         /// <summary>
         /// Copies <paramref name="byteCount"/> bytes of the container's decrypted filesystem, from
         /// the start, to <paramref name="destination"/>.
         /// </summary>
-        private async Task CopyRawBytesAsync(Stream destination, long byteCount, CancellationToken cancellationToken)
+        private async Task CopyBytesAsync(Stream destination, long byteCount, CancellationToken cancellationToken)
         {
             var remaining = byteCount;
             var buffer = new byte[81920];

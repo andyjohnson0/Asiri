@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>uk.andyjohnson.Asiri.Export</RootNamespace>
+    <Version>0.4.0</Version>
+    <Authors>Andrew Johnson</Authors>
+    <Description>Exports a VeraCrypt container's decrypted filesystem to a real disk image (raw, or wrapped in a VHD) - an optional add-on to Asiri.Core, kept separate so its DiscUtils virtual-disk dependency isn't forced on every Asiri.Core consumer.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/andyjohnson0/Asiri</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/andyjohnson0/Asiri</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LTRData.DiscUtils.Vhd" Version="1.0.88" />
+    <PackageReference Include="LTRData.DiscUtils.Vhdx" Version="1.0.88" />
+    <PackageReference Include="LTRData.DiscUtils.Vdi" Version="1.0.88" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Asiri.Core\Asiri.Core.csproj" />
+  </ItemGroup>
+
+</Project>

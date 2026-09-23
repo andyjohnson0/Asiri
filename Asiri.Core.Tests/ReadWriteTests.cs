@@ -41,10 +41,10 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             TestContainers.ContainerFixture fixture)
         {
             var copy = new TemporaryContainerCopy(fixture.ContainerFile);
-            var container = await VeraCryptContainer.OpenAsync(
+            var result = await VeraCryptContainer.OpenAsync(
                 copy.File, fixture.Password,
                 new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, AccessMode = ContainerAccessMode.ReadWrite });
-            return (copy, container);
+            return (copy, result.Container);
         }
 
         // --- ContainerAccessMode gating (filesystem-agnostic - tested once, via NTFS) ---
@@ -53,8 +53,8 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         public async Task OpenAsync_DefaultAccessMode_IsReadOnlyAndWriteOperationThrows()
         {
             var fixture = TestContainers.AesNtfs;
-            var container = await VeraCryptContainer.OpenAsync(
-                fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm });
+            var container = (await VeraCryptContainer.OpenAsync(
+                fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm })).Container;
             try
             {
                 Assert.Equal(ContainerAccessMode.ReadOnly, container.AccessMode);
@@ -605,14 +605,14 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             // closing the one that wrote to it.
             using var copy = new TemporaryContainerCopy(fixture.ContainerFile);
 
-            var writable = await VeraCryptContainer.OpenAsync(
+            var writable = (await VeraCryptContainer.OpenAsync(
                 copy.File, fixture.Password,
-                new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, AccessMode = ContainerAccessMode.ReadWrite });
+                new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, AccessMode = ContainerAccessMode.ReadWrite })).Container;
             await writable.Root.CreateFileAsync("persisted.txt", new MemoryStream(Encoding.UTF8.GetBytes("still here")));
             writable.Close();
 
-            var reopened = await VeraCryptContainer.OpenAsync(
-                copy.File, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm });
+            var reopened = (await VeraCryptContainer.OpenAsync(
+                copy.File, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm })).Container;
             try
             {
                 var file = await reopened.Root.GetFileAsync("persisted.txt");

@@ -56,7 +56,7 @@ has not been separately verified this way — the caution above still applies to
 
 ## Status
 
-Pre-release, version `0.3.0`. The public API may still change.
+Pre-release, version `0.4.0`. The public API may still change.
 
 ## What's supported
 
@@ -137,9 +137,11 @@ using uk.andyjohnson.Asiri.Core;
 
 // Password-only open: Asiri detects the encryption algorithm, hash algorithm, and
 // filesystem type automatically, the same way VeraCrypt itself mounts a volume.
-var container = await VeraCryptContainer.OpenAsync(
+// OpenAsync returns an OpenResult - the container itself, plus which header region was
+// actually used (see "Which header region" below) - rather than the container directly.
+var container = (await VeraCryptContainer.OpenAsync(
     new FileInfo(@"C:\path\to\container.hc"),
-    password: "correct horse battery staple");
+    password: "correct horse battery staple")).Container;
 
 try
 {
@@ -167,14 +169,34 @@ there's nothing to narrow on that axis.
 
 ```csharp
 // Known algorithm, unknown hash: only the hash algorithm is searched for.
-var container = await VeraCryptContainer.OpenAsync(
+var container = (await VeraCryptContainer.OpenAsync(
     new FileInfo(@"C:\path\to\container.hc"),
     password: "correct horse battery staple",
-    new OpenOptions { Algorithm = CryptoAlgorithm.Aes });
+    new OpenOptions { Algorithm = CryptoAlgorithm.Aes })).Container;
 ```
 
 `OpenOptions` also carries the PIM, keyfiles, and access mode - see below. Every I/O method is
 `CancellationToken`-aware.
+
+By default, `OpenAsync` tries the primary header and falls back to the backup header (VeraCrypt's
+own recovery copy, near the end of the container file) if it fails validation. `OpenOptions.HeaderPreference`
+can force one or the other explicitly instead - with no fallback to the other if that one fails -
+for recovery or diagnostic purposes:
+
+```csharp
+// Use only the backup header - fails outright if it doesn't validate, rather than silently
+// trying the primary instead.
+var result = await VeraCryptContainer.OpenAsync(
+    new FileInfo(@"C:\path\to\container.hc"),
+    password: "correct horse battery staple",
+    new OpenOptions { HeaderPreference = HeaderType.Backup });
+
+// Which region was actually used is always available on the result - never HeaderType.Auto,
+// regardless of what was requested. Kept off VeraCryptContainer itself, since it's a one-time
+// fact about this OpenAsync call, not ongoing container state.
+System.Console.WriteLine(result.HeaderType);
+var container = result.Container;
+```
 
 ## Creating a container
 
@@ -189,13 +211,13 @@ algorithm, and filesystem type — and returns it already open, writable by defa
 using System.IO;
 using uk.andyjohnson.Asiri.Core;
 
-var container = await VeraCryptContainer.CreateAsync(
+var container = (await VeraCryptContainer.CreateAsync(
     new FileInfo(@"C:\path\to\new-container.hc"),
     size: 64L * 1024 * 1024,
     password: "correct horse battery staple",
     CryptoAlgorithm.Aes,
     HashAlgorithm.Sha512,
-    FileSystemType.Ntfs);
+    FileSystemType.Ntfs)).Container;
 
 try
 {
@@ -229,10 +251,10 @@ using System.Text;
 using uk.andyjohnson.Asiri.Abstractions;
 using uk.andyjohnson.Asiri.Core;
 
-var container = await VeraCryptContainer.OpenAsync(
+var container = (await VeraCryptContainer.OpenAsync(
     new FileInfo(@"C:\path\to\container.hc"),
     password: "correct horse battery staple",
-    new OpenOptions { AccessMode = ContainerAccessMode.ReadWrite });
+    new OpenOptions { AccessMode = ContainerAccessMode.ReadWrite })).Container;
 
 try
 {
@@ -271,10 +293,10 @@ proof of its current credentials, so only the new ones need supplying:
 using System.IO;
 using uk.andyjohnson.Asiri.Core;
 
-var container = await VeraCryptContainer.OpenAsync(
+var container = (await VeraCryptContainer.OpenAsync(
     new FileInfo(@"C:\path\to\container.hc"),
     password: "correct horse battery staple",
-    new OpenOptions { Algorithm = CryptoAlgorithm.Aes, HashAlgorithm = HashAlgorithm.Sha512, AccessMode = ContainerAccessMode.ReadWrite });
+    new OpenOptions { Algorithm = CryptoAlgorithm.Aes, HashAlgorithm = HashAlgorithm.Sha512, AccessMode = ContainerAccessMode.ReadWrite })).Container;
 
 try
 {
@@ -291,6 +313,44 @@ The PIM and keyfiles can change independently of the password, and so can the ha
 encryption algorithm itself is the one thing that can never change this way, matching VeraCrypt's
 own behaviour: changing it would mean re-encrypting the entire data area, not just the header.
 
+## Exporting a container's filesystem
+
+`Asiri.Export` — a separate package from `Asiri.Core`, so its DiscUtils virtual-disk dependency
+isn't forced on every `Asiri.Core` consumer — exports a container's decrypted filesystem to a real
+disk image: none of it encrypted, and none of it interpreted by Asiri or DiscUtils on the way out.
+Useful for handing the plaintext to a filesystem-checking tool, another person, a real OS's own
+mount path, or a physical medium (flashing it to a USB drive, for example) entirely outside Asiri:
+
+```csharp
+using System.IO;
+using uk.andyjohnson.Asiri.Core;
+using uk.andyjohnson.Asiri.Export;
+
+var container = (await VeraCryptContainer.OpenAsync(
+    new FileInfo(@"C:\path\to\container.hc"),
+    password: "correct horse battery staple",
+    new OpenOptions { Algorithm = CryptoAlgorithm.Aes, HashAlgorithm = HashAlgorithm.Sha512 })).Container;
+
+try
+{
+    using var destination = File.Create(@"C:\path\to\export.vhd");
+    await new FileSystemExtractor(container).ExportAsync(
+        destination, FileSystemExportFormat.Vhd, PartitionTableOption.SingleMbrPartition);
+}
+finally
+{
+    container.Close();
+}
+```
+
+`FileSystemExportFormat` — the container format — and `PartitionTableOption` — whether a single MBR
+partition wraps the result — are independent choices, so adding a new container format never doubles
+the other. `FileSystemExportFormat` covers a bare raw image (a real, usable disk image in its own
+right — what a tool like `dd`, or flashing to a USB drive, expects), VHD, VHDX, and VDI — Windows can
+mount a VHD/VHDX natively, and VirtualBox a VDI, with no VeraCrypt or Asiri involved at all.
+`PartitionTableOption.SingleMbrPartition` isn't supported alongside `RawImage` — there's no container
+format there to wrap a partition table around.
+
 ## Repository structure
 
 | Project | Purpose |
@@ -298,8 +358,10 @@ own behaviour: changing it would mean re-encrypting the entire data area, not ju
 | [`Asiri.Abstractions`](Asiri.Abstractions) | Dependency-free filesystem contracts (`IDirectory`, `IFile`, `IFileSystemEntry`). Depends on nothing, so other software can target these interfaces without pulling in BouncyCastle or DiscUtils. |
 | [`Asiri.Core`](Asiri.Core) | The library itself: VeraCrypt header parsing (`HeaderParser`), sector-level encryption and decryption (`SectorDecryptor`, `DecryptedBlockDeviceStream`), the cipher and hash implementations (under `Crypto/`), the DiscUtils-backed filesystem adapters (under `Filesystem/`), and the public entry point, `VeraCryptContainer`. |
 | [`Asiri.Core.Tests`](Asiri.Core.Tests) | xUnit tests, run against real VeraCrypt container files checked into `Asiri.Core.Tests/Test Data` — covering every supported cipher/cascade, hash, filesystem, PIM, and keyfile combination — as well as synthetic, from-scratch header tests independent of the library's own crypto code, read-write tests covering create/delete/rename/move/attributes/timestamps across all three filesystems, and password/keyfile-change tests. |
-| [`Asiri.ContainerBrowser`](Asiri.ContainerBrowser) | A small WPF reference application: open a container read-only or with write access, browse and edit its folder tree (create/rename/move/delete, drag-and-drop import/export), change its password, keyfiles, PIM, or hash algorithm, and view text files, images, or a hex dump of anything else. Demonstrates `Asiri.Core` as a consumer would use it. |
-| [`Asiri.Diagnostics`](Asiri.Diagnostics) | A standalone command-line tool, not part of the library or its public API: compares what `Asiri.Core` decrypts from a container's data area against what a real, already-mounted VeraCrypt exposes for the same container, to isolate whether a filesystem-recognition failure is a decryption mismatch or something downstream of decryption. |
+| [`Asiri.Export`](Asiri.Export) | Exports a container's decrypted filesystem to a real disk image (a bare raw image, or VHD/VHDX/VDI, with or without a partition table). Kept separate from `Asiri.Core` so its DiscUtils virtual-disk dependencies aren't forced on every `Asiri.Core` consumer. |
+| [`Asiri.Export.Tests`](Asiri.Export.Tests) | xUnit tests for `Asiri.Export`, run against the same real VeraCrypt containers as `Asiri.Core.Tests`. |
+| [`Asiri.ContainerBrowser`](Asiri.ContainerBrowser) | A small WPF reference application: open a container read-only or with write access, browse and edit its folder tree (create/rename/move/delete, drag-and-drop import/export), change its password, keyfiles, PIM, or hash algorithm, export its filesystem to a disk image, and view text files, images, or a hex dump of anything else. Demonstrates `Asiri.Core` as a consumer would use it. |
+| [`Asiri.Diagnostics`](Asiri.Diagnostics) | A standalone command-line tool, not part of the library or its public API: compares what `Asiri.Core` decrypts from a container's data area against what a real, already-mounted VeraCrypt exposes for the same container, to isolate whether a filesystem-recognition failure is a decryption mismatch or something downstream of decryption; also a cheap boot-sector-only export. |
 
 Each project has its own `AGENT.md` describing the scope and conventions the agent worked to.
 
