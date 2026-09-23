@@ -11,7 +11,9 @@ This document takes precedence over all other instructions for the Asiri.Contain
 - Provide a way to open a VeraCrypt container using a file open dialog. Then prompt for the
   container's credentials - password, optional PIM, optional keyfiles, optionally the encryption
   algorithm and/or hash algorithm if already known (narrows Asiri.Core's search accordingly instead
-  of it trying every combination), and whether to open with write access (off by default) - via
+  of it trying every combination), which header region to use (`HeaderType.Auto` by default - try
+  primary, fall back to backup; `Primary`/`Backup` explicitly try only that one region, for recovery
+  or diagnostic purposes), and whether to open with write access (off by default) - via
   `CredentialsDialog`. While the open is in progress, show `ProgressDialog`: an indeterminate
   progress indicator with a Cancel button that requests cancellation via the `CancellationToken`
   passed to `OpenAsync`. Then display the container's folder hierarchy.

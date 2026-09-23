@@ -68,9 +68,9 @@ namespace uk.andyjohnson.Asiri.Diagnostics
             VeraCryptContainer container;
             try
             {
-                container = await VeraCryptContainer.OpenAsync(
+                container = (await VeraCryptContainer.OpenAsync(
                     new FileInfo(containerPath), password,
-                    new OpenOptions { Pim = pim, KeyFiles = keyFiles, Algorithm = algorithm, HashAlgorithm = hashAlgorithm }).ConfigureAwait(false);
+                    new OpenOptions { Pim = pim, KeyFiles = keyFiles, Algorithm = algorithm, HashAlgorithm = hashAlgorithm }).ConfigureAwait(false)).Container;
             }
             catch (Exception ex)
             {

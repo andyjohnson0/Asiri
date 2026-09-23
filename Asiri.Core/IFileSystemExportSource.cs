@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -29,6 +30,11 @@ namespace uk.andyjohnson.Asiri.Core
         /// range in memory at once - <paramref name="byteCount"/> is the size of a real container's
         /// entire decrypted filesystem, which can be arbitrarily large.
         /// </remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="destination"/> is null.</exception>
+        /// <exception cref="ObjectDisposedException">
+        /// The source container has already been closed (<see cref="VeraCryptContainer"/>'s own
+        /// implementation throws this; other implementations should too).
+        /// </exception>
         Task CopyBytesAsync(Stream destination, long byteCount, CancellationToken cancellationToken);
     }
 }

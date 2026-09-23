@@ -63,7 +63,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 
             try
             {
-                _container = await VeraCryptContainer.CreateAsync(
+                _container = (await VeraCryptContainer.CreateAsync(
                     path, newContainerDialog.SizeInBytes, newContainerDialog.Password, newContainerDialog.Algorithm, newContainerDialog.HashAlgorithm,
                     newContainerDialog.FileSystemType,
                     new CreateOptions
@@ -78,7 +78,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
                         ClusterSize = newContainerDialog.ClusterSize,
                         AccessMode = newContainerDialog.AccessMode
                     },
-                    cancellationTokenSource.Token);
+                    cancellationTokenSource.Token)).Container;
 
                 ClearContentPane();
                 await LoadRootAsync(path.Name);
@@ -135,7 +135,7 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
 
             try
             {
-                _container = await VeraCryptContainer.OpenAsync(
+                _container = (await VeraCryptContainer.OpenAsync(
                     new FileInfo(openDialog.FileName), credentialsDialog.Password,
                     new OpenOptions
                     {
@@ -143,9 +143,10 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
                         KeyFiles = credentialsDialog.KeyFiles,
                         Algorithm = credentialsDialog.Algorithm,
                         HashAlgorithm = credentialsDialog.HashAlgorithm,
+                        HeaderPreference = credentialsDialog.HeaderPreference,
                         AccessMode = credentialsDialog.AccessMode
                     },
-                    cancellationToken: cancellationTokenSource.Token);
+                    cancellationToken: cancellationTokenSource.Token)).Container;
 
                 ClearContentPane();
                 await LoadRootAsync(Path.GetFileName(openDialog.FileName));

@@ -86,7 +86,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         [MemberData(nameof(PimFixtures))]
         public async Task OpenAsync_PasswordOnly_WithCorrectPim_DetectsAlgorithmAndOpensContainer(TestContainers.ContainerFixture fixture)
         {
-            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Pim = fixture.Pim });
+            var container = (await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Pim = fixture.Pim })).Container;
             try
             {
                 Assert.Equal(fixture.Algorithm, container.Algorithm);

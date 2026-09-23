@@ -147,7 +147,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         public async Task OpenAsync_PasswordOnly_WithCorrectKeyFiles_DetectsAlgorithmAndOpensContainer()
         {
             var fixture = TestContainers.AesKf1ExFat;
-            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Pim = 0, KeyFiles = fixture.KeyFiles });
+            var container = (await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Pim = 0, KeyFiles = fixture.KeyFiles })).Container;
             try
             {
                 Assert.Equal(fixture.Algorithm, container.Algorithm);

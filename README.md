@@ -137,9 +137,11 @@ using uk.andyjohnson.Asiri.Core;
 
 // Password-only open: Asiri detects the encryption algorithm, hash algorithm, and
 // filesystem type automatically, the same way VeraCrypt itself mounts a volume.
-var container = await VeraCryptContainer.OpenAsync(
+// OpenAsync returns an OpenResult - the container itself, plus which header region was
+// actually used (see "Which header region" below) - rather than the container directly.
+var container = (await VeraCryptContainer.OpenAsync(
     new FileInfo(@"C:\path\to\container.hc"),
-    password: "correct horse battery staple");
+    password: "correct horse battery staple")).Container;
 
 try
 {
@@ -167,14 +169,34 @@ there's nothing to narrow on that axis.
 
 ```csharp
 // Known algorithm, unknown hash: only the hash algorithm is searched for.
-var container = await VeraCryptContainer.OpenAsync(
+var container = (await VeraCryptContainer.OpenAsync(
     new FileInfo(@"C:\path\to\container.hc"),
     password: "correct horse battery staple",
-    new OpenOptions { Algorithm = CryptoAlgorithm.Aes });
+    new OpenOptions { Algorithm = CryptoAlgorithm.Aes })).Container;
 ```
 
 `OpenOptions` also carries the PIM, keyfiles, and access mode - see below. Every I/O method is
 `CancellationToken`-aware.
+
+By default, `OpenAsync` tries the primary header and falls back to the backup header (VeraCrypt's
+own recovery copy, near the end of the container file) if it fails validation. `OpenOptions.HeaderPreference`
+can force one or the other explicitly instead - with no fallback to the other if that one fails -
+for recovery or diagnostic purposes:
+
+```csharp
+// Use only the backup header - fails outright if it doesn't validate, rather than silently
+// trying the primary instead.
+var result = await VeraCryptContainer.OpenAsync(
+    new FileInfo(@"C:\path\to\container.hc"),
+    password: "correct horse battery staple",
+    new OpenOptions { HeaderPreference = HeaderType.Backup });
+
+// Which region was actually used is always available on the result - never HeaderType.Auto,
+// regardless of what was requested. Kept off VeraCryptContainer itself, since it's a one-time
+// fact about this OpenAsync call, not ongoing container state.
+System.Console.WriteLine(result.HeaderType);
+var container = result.Container;
+```
 
 ## Creating a container
 
@@ -189,13 +211,13 @@ algorithm, and filesystem type — and returns it already open, writable by defa
 using System.IO;
 using uk.andyjohnson.Asiri.Core;
 
-var container = await VeraCryptContainer.CreateAsync(
+var container = (await VeraCryptContainer.CreateAsync(
     new FileInfo(@"C:\path\to\new-container.hc"),
     size: 64L * 1024 * 1024,
     password: "correct horse battery staple",
     CryptoAlgorithm.Aes,
     HashAlgorithm.Sha512,
-    FileSystemType.Ntfs);
+    FileSystemType.Ntfs)).Container;
 
 try
 {
@@ -229,10 +251,10 @@ using System.Text;
 using uk.andyjohnson.Asiri.Abstractions;
 using uk.andyjohnson.Asiri.Core;
 
-var container = await VeraCryptContainer.OpenAsync(
+var container = (await VeraCryptContainer.OpenAsync(
     new FileInfo(@"C:\path\to\container.hc"),
     password: "correct horse battery staple",
-    new OpenOptions { AccessMode = ContainerAccessMode.ReadWrite });
+    new OpenOptions { AccessMode = ContainerAccessMode.ReadWrite })).Container;
 
 try
 {
@@ -271,10 +293,10 @@ proof of its current credentials, so only the new ones need supplying:
 using System.IO;
 using uk.andyjohnson.Asiri.Core;
 
-var container = await VeraCryptContainer.OpenAsync(
+var container = (await VeraCryptContainer.OpenAsync(
     new FileInfo(@"C:\path\to\container.hc"),
     password: "correct horse battery staple",
-    new OpenOptions { Algorithm = CryptoAlgorithm.Aes, HashAlgorithm = HashAlgorithm.Sha512, AccessMode = ContainerAccessMode.ReadWrite });
+    new OpenOptions { Algorithm = CryptoAlgorithm.Aes, HashAlgorithm = HashAlgorithm.Sha512, AccessMode = ContainerAccessMode.ReadWrite })).Container;
 
 try
 {
@@ -304,10 +326,10 @@ using System.IO;
 using uk.andyjohnson.Asiri.Core;
 using uk.andyjohnson.Asiri.Export;
 
-var container = await VeraCryptContainer.OpenAsync(
+var container = (await VeraCryptContainer.OpenAsync(
     new FileInfo(@"C:\path\to\container.hc"),
     password: "correct horse battery staple",
-    new OpenOptions { Algorithm = CryptoAlgorithm.Aes, HashAlgorithm = HashAlgorithm.Sha512 });
+    new OpenOptions { Algorithm = CryptoAlgorithm.Aes, HashAlgorithm = HashAlgorithm.Sha512 })).Container;
 
 try
 {

@@ -82,7 +82,21 @@ This document takes precedence over all other instructions for the Asiri.Core pr
   - CRC checks
   - Version fields
   - Sector size
-- If the primary header fails validation, attempt backup header fallback.
+- `OpenOptions.HeaderPreference` (`HeaderType`, default `Auto`): `Auto` tries the primary header and
+  falls back to the backup header if it fails validation. `Primary`/`Backup` explicitly try only
+  that one region, with no fallback to the other, verified against VeraCrypt's own source
+  (`Core/MountOptions.h`'s `UseBackupHeaders`, `Volume/Volume.cpp`'s `Volume::Open`) - VeraCrypt's own
+  mount-time choice is a single, non-fallback option too; its "silently recovers from a damaged
+  primary header" behaviour is a GUI-level retry heuristic on top of that
+  (`Main/GraphicUserInterface.cpp`, gated behind repeated incorrect-password attempts), not a core
+  behaviour.
+- `OpenAsync`/`CreateAsync` both return `OpenResult` (the container, plus which header region was
+  actually used - never `Auto`, and always `Primary` for `CreateAsync`), not `VeraCryptContainer`
+  directly. Deliberate: which header region resolved is a one-time fact about that particular
+  open/create call, not ongoing container state - nothing the container does later ever consults
+  it again, unlike `Algorithm`/`HashAlgorithm`/`AccessMode`, which genuinely are read again (e.g.
+  by `ChangeCredentialsAsync`). Do not add a `HeaderType`-shaped property back onto
+  `VeraCryptContainer` itself for this reason.
 - Do not modify cryptographic parameters or block sizes. The PBKDF2 iteration count is the one
   parameter that legitimately varies, per PIM - see Cryptography Requirements above - not a
   deviation from this.
@@ -127,7 +141,14 @@ This document takes precedence over all other instructions for the Asiri.Core pr
   - `InvalidOperationException`
   - `ArgumentException`
   - `ArgumentNullException`
+  - `ObjectDisposedException` - used exclusively for "this container has already been closed"
+    (`ContainerLifetime.ThrowIfClosed`), never for anything else. The more idiomatic .NET choice
+    for that specific condition than `InvalidOperationException` would be, so it's an accepted
+    fourth type rather than a violation of this rule.
 - All exceptions must include descriptive messages.
+- Never let an underlying dependency's own exception type (DiscUtils, BouncyCastle, or a raw
+  `System.IO` failure) propagate unwrapped - catch it and rethrow as one of the types above, with
+  the original as `InnerException`, so a caller only ever needs to handle this fixed set.
 
 ## Dependencies
 - Use only BouncyCastle and DiscUtils (the LTRData.DiscUtils.* packages: Core, Fat, Ntfs, ExFat -

@@ -21,15 +21,16 @@ namespace uk.andyjohnson.Asiri.Core.Tests
     [Trait("Category", "Integration")]
     public class ChangePasswordTests
     {
-        private static Task<VeraCryptContainer> OpenWritableAsync(TestContainers.ContainerFixture fixture, FileInfo path)
+        private static async Task<VeraCryptContainer> OpenWritableAsync(TestContainers.ContainerFixture fixture, FileInfo path)
         {
-            return VeraCryptContainer.OpenAsync(
+            var result = await VeraCryptContainer.OpenAsync(
                 path, fixture.Password,
                 new OpenOptions
                 {
                     Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, Pim = fixture.Pim, KeyFiles = fixture.KeyFiles,
                     AccessMode = ContainerAccessMode.ReadWrite
                 });
+            return result.Container;
         }
 
         [Fact]
@@ -55,7 +56,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
 
             // The new password must work, and the volume's actual contents - proof the master key
             // was never touched - must still be exactly as before.
-            var container = await VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm });
+            var container = (await VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm })).Container;
             try
             {
                 var file = await container.Root.GetFileAsync("test.txt");
@@ -91,7 +92,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 VeraCryptContainer.OpenAsync(copy.File, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm }));
 
-            var container = await VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm });
+            var container = (await VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm })).Container;
             try
             {
                 var file = await container.Root.GetFileAsync("test.txt");
@@ -125,7 +126,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm }));
 
-            var container = await VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = newHash });
+            var container = (await VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = newHash })).Container;
             try
             {
                 var file = await container.Root.GetFileAsync("test.txt");
@@ -159,7 +160,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, Pim = 0 }));
 
-            var container = await VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, Pim = newPim });
+            var container = (await VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, Pim = newPim })).Container;
             try
             {
                 var file = await container.Root.GetFileAsync("test.txt");
@@ -195,8 +196,8 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, KeyFiles = fixture.KeyFiles }));
 
-            var container = await VeraCryptContainer.OpenAsync(
-                copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, KeyFiles = new[] { newKeyFile } });
+            var container = (await VeraCryptContainer.OpenAsync(
+                copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm, KeyFiles = new[] { newKeyFile } })).Container;
             try
             {
                 var file = await container.Root.GetFileAsync("test.txt");
@@ -219,8 +220,8 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             var fixture = TestContainers.AesNtfs;
             using var copy = new TemporaryContainerCopy(fixture.ContainerFile);
 
-            var container = await VeraCryptContainer.OpenAsync(
-                copy.File, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm });
+            var container = (await VeraCryptContainer.OpenAsync(
+                copy.File, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm })).Container;
             try
             {
                 await Assert.ThrowsAsync<InvalidOperationException>(() => container.ChangeCredentialsAsync("a-new-password-5"));
@@ -232,7 +233,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
 
             // Nothing should have been written: the original password must still open the copy, with
             // its contents unaffected.
-            var reopened = await VeraCryptContainer.OpenAsync(copy.File, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm });
+            var reopened = (await VeraCryptContainer.OpenAsync(copy.File, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm })).Container;
             try
             {
                 var file = await reopened.Root.GetFileAsync("test.txt");
@@ -270,7 +271,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
                 stream.Write(garbage, 0, garbage.Length);
             }
 
-            var container = await VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm });
+            var container = (await VeraCryptContainer.OpenAsync(copy.File, newPassword, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm })).Container;
             try
             {
                 var file = await container.Root.GetFileAsync("test.txt");

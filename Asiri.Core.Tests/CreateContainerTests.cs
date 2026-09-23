@@ -45,14 +45,14 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         {
             using var tempPath = new TemporaryContainerPath();
 
-            var created = await VeraCryptContainer.CreateAsync(
+            var created = (await VeraCryptContainer.CreateAsync(
                 tempPath.File, Size, password, algorithm, hashAlgorithm, fileSystemType,
-                new CreateOptions { Pim = pim, KeyFiles = keyFiles, Label = label, ClusterSize = clusterSize });
+                new CreateOptions { Pim = pim, KeyFiles = keyFiles, Label = label, ClusterSize = clusterSize })).Container;
             created.Close();
 
-            var container = await VeraCryptContainer.OpenAsync(
+            var container = (await VeraCryptContainer.OpenAsync(
                 tempPath.File, password,
-                new OpenOptions { Algorithm = algorithm, HashAlgorithm = hashAlgorithm, Pim = pim, KeyFiles = keyFiles, AccessMode = ContainerAccessMode.ReadWrite });
+                new OpenOptions { Algorithm = algorithm, HashAlgorithm = hashAlgorithm, Pim = pim, KeyFiles = keyFiles, AccessMode = ContainerAccessMode.ReadWrite })).Container;
             try
             {
                 using var content = new MemoryStream(Encoding.UTF8.GetBytes("Hello, new container!"));
@@ -66,8 +66,8 @@ namespace uk.andyjohnson.Asiri.Core.Tests
 
             // A separate, later open - proving the write in the block above was actually persisted to
             // disk, not merely visible through the same in-memory handle that made it.
-            var reopened = await VeraCryptContainer.OpenAsync(
-                tempPath.File, password, new OpenOptions { Algorithm = algorithm, HashAlgorithm = hashAlgorithm, Pim = pim, KeyFiles = keyFiles });
+            var reopened = (await VeraCryptContainer.OpenAsync(
+                tempPath.File, password, new OpenOptions { Algorithm = algorithm, HashAlgorithm = hashAlgorithm, Pim = pim, KeyFiles = keyFiles })).Container;
             try
             {
                 var file = await reopened.Root.GetFileAsync("test.txt");
@@ -170,8 +170,8 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             // observer can never tell whether that space holds a hidden volume or nothing at all.
             using var tempPath = new TemporaryContainerPath();
 
-            var container = await VeraCryptContainer.CreateAsync(
-                tempPath.File, Size, "a-create-test-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512, FileSystemType.Ntfs);
+            var container = (await VeraCryptContainer.CreateAsync(
+                tempPath.File, Size, "a-create-test-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512, FileSystemType.Ntfs)).Container;
             container.Close();
 
             using var stream = tempPath.File.OpenRead();
@@ -195,8 +195,8 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             // untouched, newly-extended file would otherwise contain.
             using var tempPath = new TemporaryContainerPath();
 
-            var container = await VeraCryptContainer.CreateAsync(
-                tempPath.File, Size, "a-create-test-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512, FileSystemType.Ntfs);
+            var container = (await VeraCryptContainer.CreateAsync(
+                tempPath.File, Size, "a-create-test-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512, FileSystemType.Ntfs)).Container;
             container.Close();
 
             using var stream = tempPath.File.OpenRead();
@@ -244,9 +244,9 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         {
             using var tempPath = new TemporaryContainerPath();
 
-            var container = await VeraCryptContainer.CreateAsync(
+            var container = (await VeraCryptContainer.CreateAsync(
                 tempPath.File, Size, "a-create-test-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512,
-                FileSystemType.Ntfs, new CreateOptions { Label = "ASIRITEST" });
+                FileSystemType.Ntfs, new CreateOptions { Label = "ASIRITEST" })).Container;
             try
             {
                 // VeraCryptContainer has no public surface for the underlying filesystem's own volume
@@ -288,11 +288,11 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         public async Task CreateAsync_ThenAutoDetectOpen_Succeeds(FileSystemType fileSystemType)
         {
             using var tempPath = new TemporaryContainerPath();
-            var created = await VeraCryptContainer.CreateAsync(
-                tempPath.File, Size, "a-create-test-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512, fileSystemType);
+            var created = (await VeraCryptContainer.CreateAsync(
+                tempPath.File, Size, "a-create-test-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512, fileSystemType)).Container;
             created.Close();
 
-            var container = await VeraCryptContainer.OpenAsync(tempPath.File, "a-create-test-password");
+            var container = (await VeraCryptContainer.OpenAsync(tempPath.File, "a-create-test-password")).Container;
             try
             {
                 Assert.Equal(fileSystemType, container.FileSystemType);
@@ -308,8 +308,8 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         {
             using var tempPath = new TemporaryContainerPath();
 
-            var created = await VeraCryptContainer.CreateAsync(
-                tempPath.File, Size, "the-real-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512, FileSystemType.ExFat);
+            var created = (await VeraCryptContainer.CreateAsync(
+                tempPath.File, Size, "the-real-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512, FileSystemType.ExFat)).Container;
             created.Close();
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -335,17 +335,17 @@ namespace uk.andyjohnson.Asiri.Core.Tests
             using var copy = new TemporaryContainerCopy(TestContainers.AesNtfs.ContainerFile);
             var originalBytes = await File.ReadAllBytesAsync(copy.File.FullName);
 
-            var container = await VeraCryptContainer.CreateAsync(
+            var container = (await VeraCryptContainer.CreateAsync(
                 copy.File, Size, "a-create-test-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512, FileSystemType.Ntfs,
-                new CreateOptions { Overwrite = true });
+                new CreateOptions { Overwrite = true })).Container;
             container.Close();
 
             // The old real-fixture bytes are genuinely gone, replaced by a fresh container - not
             // merely "creation didn't throw".
             Assert.NotEqual(originalBytes, await File.ReadAllBytesAsync(copy.File.FullName));
 
-            var reopened = await VeraCryptContainer.OpenAsync(
-                copy.File, "a-create-test-password", new OpenOptions { Algorithm = CryptoAlgorithm.Aes, HashAlgorithm = HashAlgorithm.Sha512 });
+            var reopened = (await VeraCryptContainer.OpenAsync(
+                copy.File, "a-create-test-password", new OpenOptions { Algorithm = CryptoAlgorithm.Aes, HashAlgorithm = HashAlgorithm.Sha512 })).Container;
             reopened.Close();
         }
 
@@ -354,8 +354,8 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         {
             using var tempPath = new TemporaryContainerPath();
 
-            var container = await VeraCryptContainer.CreateAsync(
-                tempPath.File, Size, "a-create-test-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512, FileSystemType.Ntfs);
+            var container = (await VeraCryptContainer.CreateAsync(
+                tempPath.File, Size, "a-create-test-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512, FileSystemType.Ntfs)).Container;
             try
             {
                 Assert.Equal(ContainerAccessMode.ReadWrite, container.AccessMode);
@@ -373,9 +373,9 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         {
             using var tempPath = new TemporaryContainerPath();
 
-            var container = await VeraCryptContainer.CreateAsync(
+            var container = (await VeraCryptContainer.CreateAsync(
                 tempPath.File, Size, "a-create-test-password", CryptoAlgorithm.Aes, HashAlgorithm.Sha512, FileSystemType.Ntfs,
-                new CreateOptions { AccessMode = ContainerAccessMode.ReadOnly });
+                new CreateOptions { AccessMode = ContainerAccessMode.ReadOnly })).Container;
             try
             {
                 Assert.Equal(ContainerAccessMode.ReadOnly, container.AccessMode);

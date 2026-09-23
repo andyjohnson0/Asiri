@@ -66,7 +66,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         [MemberData(nameof(BruteForceRepresentativeFixtures))]
         public async Task OpenAsync_WithCorrectPassword_DetectsFilesystemAndOpensContainer(TestContainers.ContainerFixture fixture)
         {
-            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password);
+            var container = (await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password)).Container;
             try
             {
                 Assert.Equal(fixture.Algorithm, container.Algorithm);
@@ -91,7 +91,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         public async Task OpenAsync_WithKnownAlgorithm_SearchesOnlyHashAndFindsCorrectContainer()
         {
             var fixture = TestContainers.AesWhirlpoolExFat;
-            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm });
+            var container = (await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm })).Container;
             try
             {
                 Assert.Equal(fixture.Algorithm, container.Algorithm);
@@ -114,7 +114,7 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         public async Task OpenAsync_WithKnownHashAlgorithm_SearchesOnlyAlgorithmAndFindsCorrectContainer()
         {
             var fixture = TestContainers.CamelliaSerpentExFat;
-            var container = await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { HashAlgorithm = fixture.HashAlgorithm });
+            var container = (await VeraCryptContainer.OpenAsync(fixture.ContainerFile, fixture.Password, new OpenOptions { HashAlgorithm = fixture.HashAlgorithm })).Container;
             try
             {
                 Assert.Equal(fixture.Algorithm, container.Algorithm);
@@ -134,8 +134,8 @@ namespace uk.andyjohnson.Asiri.Core.Tests
         public async Task OpenAsync_WithKnownAlgorithmAndHashAlgorithm_FindsCorrectContainer()
         {
             var fixture = TestContainers.AesNtfs;
-            var container = await VeraCryptContainer.OpenAsync(
-                fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm });
+            var container = (await VeraCryptContainer.OpenAsync(
+                fixture.ContainerFile, fixture.Password, new OpenOptions { Algorithm = fixture.Algorithm, HashAlgorithm = fixture.HashAlgorithm })).Container;
             try
             {
                 Assert.Equal(fixture.Algorithm, container.Algorithm);

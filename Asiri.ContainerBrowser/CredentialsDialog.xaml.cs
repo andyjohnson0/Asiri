@@ -12,11 +12,13 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
     /// <summary>
     /// Modal dialog prompting for the credentials needed to open a VeraCrypt container: the password
     /// (masked, via <see cref="System.Windows.Controls.PasswordBox"/>), an optional PIM, optional
-    /// keyfiles, and - if the caller already happens to know either - the encryption and/or hash
+    /// keyfiles, - if the caller already happens to know either - the encryption and/or hash
     /// algorithm, which narrows VeraCryptContainer.OpenAsync's search accordingly instead of it
-    /// having to try every combination. None of these are validated for correctness here - only the
-    /// PIM's format, since it must be a number - opening the container is still where a wrong
-    /// combination (including a wrongly-guessed algorithm or hash) is actually reported.
+    /// having to try every combination, and which header region to use (primary, backup, or the
+    /// default automatic choice between them). None of these are validated for correctness here -
+    /// only the PIM's format, since it must be a number - opening the container is still where a
+    /// wrong combination (including a wrongly-guessed algorithm, hash, or header region) is actually
+    /// reported.
     /// </summary>
     public partial class CredentialsDialog : Window
     {
@@ -56,6 +58,9 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
             hashAlgorithmOptions.AddRange(Enum.GetValues<HashAlgorithm>().Select(h => new AlgorithmOption<HashAlgorithm>(h.ToString(), h)));
             HashAlgorithmComboBox.ItemsSource = hashAlgorithmOptions;
             HashAlgorithmComboBox.SelectedIndex = 0;
+
+            HeaderPreferenceComboBox.ItemsSource = Enum.GetValues<HeaderType>();
+            HeaderPreferenceComboBox.SelectedIndex = 0;
         }
 
         public string Password => PasswordBoxControl.Password;
@@ -67,6 +72,8 @@ namespace uk.andyjohnson.Asiri.ContainerBrowser
         public CryptoAlgorithm? Algorithm => ((AlgorithmOption<CryptoAlgorithm>)AlgorithmComboBox.SelectedItem).Value;
 
         public HashAlgorithm? HashAlgorithm => ((AlgorithmOption<HashAlgorithm>)HashAlgorithmComboBox.SelectedItem).Value;
+
+        public HeaderType HeaderPreference => (HeaderType)HeaderPreferenceComboBox.SelectedItem;
 
         public ContainerAccessMode AccessMode =>
             EnableWriteAccessCheckBox.IsChecked == true ? ContainerAccessMode.ReadWrite : ContainerAccessMode.ReadOnly;

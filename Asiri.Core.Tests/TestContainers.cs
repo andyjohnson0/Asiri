@@ -312,11 +312,17 @@ namespace uk.andyjohnson.Asiri.Core.Tests
                 KeyFiles = keyFiles ?? Array.Empty<FileInfo>();
             }
 
-            /// <summary>Opens this container via the full public VeraCryptContainer.OpenAsync API.</summary>
-            public Task<VeraCryptContainer> OpenAsync()
+            /// <summary>
+            /// Opens this container via the full public VeraCryptContainer.OpenAsync API, unwrapping
+            /// its OpenResult down to just the container - the overwhelming majority of callers here
+            /// only ever want that; use VeraCryptContainer.OpenAsync directly for the rare test that
+            /// also needs OpenResult.HeaderType.
+            /// </summary>
+            public async Task<VeraCryptContainer> OpenAsync()
             {
-                return VeraCryptContainer.OpenAsync(
+                var result = await VeraCryptContainer.OpenAsync(
                     ContainerFile, Password, new OpenOptions { Algorithm = Algorithm, HashAlgorithm = HashAlgorithm, Pim = Pim, KeyFiles = KeyFiles });
+                return result.Container;
             }
 
             // Used by the xUnit test runner to label [Theory] cases in output; without this, every
